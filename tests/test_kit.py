@@ -154,7 +154,19 @@ class FakeDaemon(BaseHTTPRequestHandler):
             return
         last = int(q.split("id >")[1].split()[0]) if "id >" in q else 0
         limit = int(q.rsplit("limit", 1)[1].split()[0])
-        if "_bulk_logical_ui_events" in q:
+        if "count(*)" in q and "from frames" in q and "group by" not in q:
+            rows = [{"c": len(FRAMES)}]
+        elif "count(*)" in q and "from audio_chunks" in q:
+            rows = [{"c": len(AUDIO)}]
+        elif "event_type, count(*)" in q:
+            from collections import Counter
+            rows = [{"event_type": k, "c": v} for k, v in Counter(e["event_type"] for e in EVENTS).items()]
+        elif "sum(text_length)" in q:
+            rows = [{"c": sum(e["text_length"] or 0 for e in EVENTS if e["event_type"] == "text")}]
+        elif "app_name, count(*)" in q:
+            from collections import Counter
+            rows = [{"app_name": k, "c": v} for k, v in Counter(f["app_name"] for f in FRAMES).most_common()]
+        elif "_bulk_logical_ui_events" in q:
             rows = [{k: e[k] for k in export.UI_EVENT_COLUMNS} for e in EVENTS if e["id"] > last][:limit]
         elif "from ui_events" in q:
             self._send(500, {"error": "should use the logical view"})
@@ -303,6 +315,10 @@ class SessionFolderTests(unittest.TestCase):
                     export.export_session(srv.server_port, "wrong-key", session, parse_timestamp(T0), parse_timestamp(T0) + 600)
                 stats = export.export_session(srv.server_port, FakeDaemon.key, session, parse_timestamp(T0), parse_timestamp(T0) + 600)
                 paged = export.raw_sql_all(srv.server_port, FakeDaemon.key, "_bulk_logical_ui_events", export.UI_EVENT_COLUMNS, page=2)
+                live = export.api_stats(srv.server_port, FakeDaemon.key)
+                seen = []
+                waited = export.wait_for_capture(srv.server_port, FakeDaemon.key, timeout=5, poll=0.1, progress=lambda t, st: seen.append(st))
+                nobody = export.wait_for_capture(1, FakeDaemon.key, timeout=0.3, poll=0.1)  # port 1: nothing listening
             finally:
                 srv.shutdown()
             events = export.load_jsonl(session / "export" / "ui_events.jsonl")
@@ -319,6 +335,13 @@ class SessionFolderTests(unittest.TestCase):
         self.assertEqual(stats["frames"], 4)
         self.assertEqual(stats["audio_files"], 1)
         self.assertEqual(stats["typed_chars"], len("jazz dinner"))
+        self.assertEqual(live["frames"], 4)
+        self.assertEqual(live["ui_events"]["click"], 3)
+        self.assertEqual(live["typed_chars"], len("jazz dinner"))
+        self.assertEqual(live["apps"][0], ("Google Chrome", 2))
+        self.assertEqual(waited["frames"], 4)
+        self.assertTrue(seen and seen[-1] is not None)
+        self.assertEqual(nobody["frames"], 0)
 
     def test_zip_ships_export_and_media_not_internals(self):
         with tempfile.TemporaryDirectory() as d:

@@ -190,6 +190,37 @@ def export_session(port: int, key: str | None, session_dir: Path, start_ts: floa
     return stats
 
 
+def api_stats(port: int, key: str | None) -> dict:
+    """Counts while the recorder runs. screenpipe opens its index with an exclusive lock, so sqlite reads from another
+    process fail until it exits; the API is the only live view. Raises ApiError until the daemon answers."""
+    stats = {"frames": 0, "ui_events": {}, "audio_chunks": 0, "audio_files": 0, "apps": [], "domains": [], "typed_chars": 0}
+    stats["frames"] = int(raw_sql(port, key, "select count(*) as c from frames limit 1")[0]["c"])
+    stats["audio_chunks"] = int(raw_sql(port, key, "select count(*) as c from audio_chunks limit 1")[0]["c"])
+    stats["audio_files"] = stats["audio_chunks"]
+    stats["ui_events"] = {r["event_type"]: int(r["c"]) for r in raw_sql(port, key, "select event_type, count(*) as c from ui_events group by 1 limit 100")}
+    stats["typed_chars"] = int(raw_sql(port, key, "select coalesce(sum(text_length), 0) as c from ui_events where event_type='text' limit 1")[0]["c"] or 0)
+    stats["apps"] = [(r["app_name"], int(r["c"])) for r in raw_sql(port, key, "select app_name, count(*) as c from frames where app_name is not null group by 1 order by 2 desc limit 50")]
+    return stats
+
+
+def wait_for_capture(port: int, key: str | None, timeout: float = 120.0, poll: float = 2.0, progress=None) -> dict:
+    """Block until the daemon answers and has at least one frame, or time out. `progress(elapsed_s, stats_or_None)` is called each poll."""
+    deadline = time.time() + timeout
+    t0 = time.time()
+    stats = None
+    while time.time() < deadline:
+        try:
+            stats = api_stats(port, key)
+        except ApiError:
+            stats = None
+        if progress:
+            progress(time.time() - t0, stats)
+        if stats and stats["frames"] > 0:
+            return stats
+        time.sleep(poll)
+    return stats or {"frames": 0, "ui_events": {}, "audio_chunks": 0, "audio_files": 0, "apps": [], "domains": [], "typed_chars": 0}
+
+
 def stats_from_export(session_dir: Path) -> dict | None:
     out = session_dir / "export"
     if not (out / "frames.jsonl").exists():

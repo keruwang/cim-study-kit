@@ -16,7 +16,7 @@ from tkinter import messagebox, scrolledtext, ttk
 from . import notify, prompts, screenpipe
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
-from .export import ApiError, export_session, stats_from_export
+from .export import ApiError, api_stats, export_session, stats_from_export, wait_for_capture
 from .redact import redact_app, redact_range
 from .session import append_jsonl, checkpoint_minutes, silence_due, start_backup_audio, stop_backup_audio, write_json
 from .timeutil import iso_utc
@@ -260,10 +260,17 @@ class StudyApp:
             self.api_key = screenpipe.new_api_key()
             self.proc = screenpipe.start_recorder(self.cfg, self.data_dir, self.cfg["screenpipe_port"],
                                                   self.session_dir / "screenpipe.log", audio=True, api_key=self.api_key)
-            stats = screenpipe.wait_for_capture(self.data_dir, need_audio=True, timeout=90)
+            def progress(elapsed, st):
+                if st is None:
+                    msg = f"Recorder starting ({int(elapsed)} s; the first start downloads and boots, 20-40 s) ..."
+                else:
+                    msg = f"Recorder up ({int(elapsed)} s): {st['frames']} screenshots so far ..."
+                self.events.put(("progress", msg))
+
+            stats = wait_for_capture(self.cfg["screenpipe_port"], self.api_key, timeout=120, progress=progress)
             if stats["frames"] == 0:
                 screenpipe.stop_recorder(self.proc)
-                self.events.put(("failed", "No screenshots in 90 s. Run `python3 study.py setup` in Terminal to check permissions. Log: "
+                self.events.put(("failed", "No screenshots in 120 s. Run `python3 study.py setup` in Terminal to check permissions. Log: "
                                  + str(self.session_dir / "screenpipe.log")))
                 return
             self.events.put(("started", stats))
@@ -276,13 +283,15 @@ class StudyApp:
         except queue.Empty:
             self.later(500, self._poll_start)
             return
+        if kind == "progress":
+            self.status_var.set(payload)
+            self.later(500, self._poll_start)
+            return
         if kind == "failed":
             messagebox.showerror("Recorder", payload)
             self.show_instructions()
             return
         warn = ""
-        if not self.demo and payload["audio_files"] == 0 and payload["audio_chunks"] == 0:
-            warn = "No audio yet; if this persists the think-aloud will be missing."
         if not self.demo:
             self.backup = start_backup_audio(self.session_dir, self.cfg)
             self.session["mic_monitor"] = self.backup is not None
@@ -323,6 +332,8 @@ class StudyApp:
         self.root.geometry(self.pill_geometry)
         if warn:
             self.banner(warn, flash=False, seconds=20)
+        self.last_stats = None
+        self.later(60000, self.poll_stats)
         self.tick()
 
     def _expand_pill(self, expanded: bool) -> None:
@@ -387,6 +398,7 @@ class StudyApp:
     def tick(self) -> None:
         if self.start_ts is None:
             return
+        self._drain_stats()
         minutes, every, cps = self.schedule()
         elapsed = time.time() - self.start_ts
         m = elapsed / self.minute_s
@@ -423,15 +435,30 @@ class StudyApp:
         self.later(1000, self.tick)
 
     def poll_stats(self) -> None:
+        """Once a minute, in a thread: warn on the pill if the recorder has produced no audio file yet."""
         if self.start_ts is None or self.demo:
             return
+
+        def work():
+            try:
+                st = api_stats(self.cfg["screenpipe_port"], self.api_key)
+                self.events.put(("stats", st))
+            except (ApiError, OSError, ValueError, KeyError, IndexError):
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+        self.later(60000, self.poll_stats)
+
+    def _drain_stats(self) -> None:
         try:
-            s = screenpipe.capture_stats(self.data_dir)
-            clicks = s["ui_events"].get("click", 0)
-            self.stats_var.set(f"captured so far: {s['frames']} screenshots, {clicks} clicks, {s['audio_files']} audio files")
-        except Exception:
+            while True:
+                kind, payload = self.events.get_nowait()
+                if kind == "stats" and self.start_ts is not None:
+                    self.last_stats = payload
+                    if payload["audio_chunks"] == 0 and time.time() - self.start_ts > 75:
+                        self.banner("No audio from the recorder yet. Is the microphone allowed for Terminal?", flash=False, seconds=20)
+        except queue.Empty:
             pass
-        self.later(30000, self.poll_stats)
 
     def confirm_end(self) -> None:
         if messagebox.askyesno("End session", "Stop the session now? The recording so far is kept."):

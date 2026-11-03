@@ -14,7 +14,7 @@ from . import notify, prompts, screenpipe
 from .audio_monitor import MicMonitor, find_ffmpeg
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
-from .export import ApiError, export_session, stats_from_export
+from .export import ApiError, api_stats, export_session, stats_from_export, wait_for_capture
 from .redact import redact_app, redact_range
 from .timeutil import iso_utc, local_clock, parse_timestamp
 
@@ -131,12 +131,18 @@ def run_setup(cfg: dict, args) -> int:
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     log_path = tmp / "screenpipe.log"
-    proc = screenpipe.start_recorder(cfg, tmp / "screenpipe", cfg["screenpipe_port"], log_path, audio=True)
+    key = screenpipe.new_api_key()
+    proc = screenpipe.start_recorder(cfg, tmp / "screenpipe", cfg["screenpipe_port"], log_path, audio=True, api_key=key)
     mon = start_backup_audio(tmp, cfg)
     try:
-        stats = screenpipe.wait_for_capture(tmp / "screenpipe", need_audio=True, timeout=75)
-        time.sleep(10)
-        stats = screenpipe.capture_stats(tmp / "screenpipe")
+        stats = wait_for_capture(cfg["screenpipe_port"], key, timeout=120,
+                                 progress=lambda t, st: say(f"  {int(t)} s: " + ("starting ..." if st is None else f"{st['frames']} screenshots")))
+        say("  recorder is up; keep clicking around and talking for 45 more seconds (the first audio file takes 30 s) ...")
+        time.sleep(45)
+        try:
+            stats = api_stats(cfg["screenpipe_port"], key)
+        except ApiError:
+            pass
     finally:
         screenpipe.stop_recorder(proc)
         stop_backup_audio(mon)
@@ -410,13 +416,12 @@ def run_session(cfg: dict, args) -> int:
     say("Starting the recorder (first start can take 20-30 s) ...")
     api_key = screenpipe.new_api_key()
     proc = screenpipe.start_recorder(cfg, data_dir, cfg["screenpipe_port"], session_dir / "screenpipe.log", audio=True, api_key=api_key)
-    stats = screenpipe.wait_for_capture(data_dir, need_audio=True, timeout=90)
+    stats = wait_for_capture(cfg["screenpipe_port"], api_key, timeout=120,
+                             progress=lambda t, st: say(f"  {int(t)} s: " + ("starting ..." if st is None else f"{st['frames']} screenshots")))
     if stats["frames"] == 0:
         screenpipe.stop_recorder(proc)
-        say("The recorder produced no screenshots in 90 s. Run `python3 study.py setup` to check permissions. Log: " + str(session_dir / "screenpipe.log"))
+        say("The recorder produced no screenshots in 120 s. Run `python3 study.py setup` to check permissions. Log: " + str(session_dir / "screenpipe.log"))
         return 1
-    if stats["audio_files"] == 0 and stats["audio_chunks"] == 0:
-        say("WARNING: no audio yet. If this persists the think-aloud will be missing; the backup recorder (if available) still runs.")
     backup = start_backup_audio(session_dir, cfg)
     session["mic_monitor"] = backup is not None
     if backup is None:
