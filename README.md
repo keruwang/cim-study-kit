@@ -31,7 +31,7 @@ The silence reminder needs `ffmpeg` to hear the microphone (macOS: `brew install
 python3 study.py run
 ```
 
-A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, and the think-aloud instructions. When you press Start it shrinks to a small timer in the bottom-right corner of the screen and stays out of the way. Just work and keep saying what you are thinking. If you go quiet for about five minutes, a chime and a short voice line remind you to think aloud; nothing else interrupts you until "two minutes left" and "time is up". Then the window comes back, asks a few questions, shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
+A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, and the think-aloud instructions. When you press Start it shrinks to a small timer in the bottom-right corner of the screen and stays out of the way. Just work and keep saying what you are thinking. If you go quiet for about five minutes, a chime and a short voice line remind you to think aloud; nothing else interrupts you until "two minutes left" and "time is up". Then the window comes back, asks you for a short written summary (your goals, what you did, what you might do next), shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
 
 Press **End** on the timer to stop early. Use the **Test chime and voice** button on the first page to check that you can hear the cues. The small "mic" label on the timer turns green while the kit hears you; if it never does, tell us.
 
@@ -56,7 +56,7 @@ Session bundle layout:
 
 ```
 sessions/P07_20261103-1402/
-  session.json          participant, family, axes, task text, timing, screenpipe args, retrospective answers, redactions
+  session.json          participant, family, axes, task text, timing, screenpipe args, the written summary (retrospective.summary), redactions
   checkpoints.jsonl     when each cue fired (silence reminder with seconds of silence / nudge / wrap / end / optional checkpoint)
   export/               ui_events.jsonl (every input event), frames.jsonl (every screenshot: app, window, url,
                         trigger, screen text, snapshot path), audio_chunks.jsonl, summary.json; read back from the

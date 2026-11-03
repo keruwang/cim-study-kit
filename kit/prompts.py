@@ -102,26 +102,11 @@ START_SPOKEN = "Recording has started. Please begin, and keep thinking aloud."
 WRAP_UP_SPOKEN = "Two minutes left. Start wrapping up your thought."
 END_SPOKEN = "Time is up. Please finish your sentence, then come back to the study window."
 
-# Retrospective questions. kind: text | int1to5 | yesno | list
+# Retrospective: one free-text summary (decided 2026-11-02). Ratings of the agent's propositions come later, in a separate pipeline.
 RETROSPECTIVE = [
-    {"key": "final_goal", "kind": "text",
-     "q": "In your own words: by the end, what were you trying to do? (one or two sentences)"},
-    {"key": "could_say_at_start", "kind": "int1to5",
-     "q": "Could you have stated that goal at the START of the session? 1 = not at all, 5 = yes, exactly this"},
-    {"key": "changes", "kind": "list",
-     "q": "Moments where what you were trying to do changed. For each, one line: roughly when (minutes in), what changed, and why. Enter an empty line when done"},
-    {"key": "mattered", "kind": "list",
-     "q": "Which pages, documents, or messages you saw turned out to matter most to where you ended up? Up to five, one per line. Empty line when done"},
-    {"key": "carried_forward", "kind": "text",
-     "q": "Was there anything you saw early that stayed in your mind and shaped later steps (a constraint, an option you rejected, a price, a date)? Describe briefly, or leave empty"},
-    {"key": "side_tasks_done", "kind": "text",
-     "q": "If you did any side tasks, which, and roughly when? Leave empty if none"},
-    {"key": "think_aloud_effect", "kind": "int1to5",
-     "q": "Did thinking aloud change how you worked? 1 = not at all, 5 = a lot"},
-    {"key": "naturalness", "kind": "int1to5",
-     "q": "How close was this to how you would have done this task on your own? 1 = very different, 5 = the same"},
-    {"key": "comments", "kind": "text",
-     "q": "Anything else (problems, confusion, what you would tell us)? Leave empty to skip"},
+    {"key": "summary", "kind": "text",
+     "q": "In your own words, write a short summary: what were your goals during this session, what did you actually do, "
+          "and what might you want to do next about them? A few sentences is enough."},
 ]
 
 REVIEW_INTRO = """

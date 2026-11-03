@@ -21,7 +21,7 @@ python3 researcher/export_history.py incoming/P07_20261103-1402      # writes de
 - `checkpoints.txt` gives the exact times of the chimes; the participant's one-sentence answers are in the transcript right after each cue, and the spoken cue itself appears in the transcript as a marker.
 - The screenshots stay in `screenpipe/data/data/<date>/*.jpg` (paths in `export/frames.jsonl`) for a replay and for later screenshot-input conditions. A replay can be assembled from the frames and `backup_audio.wav` with ffmpeg; screenpipe's own `export` subcommand still expects the old `db.sqlite` layout and does not work on 0.4.55 bundles.
 - `export/*.jsonl` is the full record: `ui_events.jsonl` has every column of screenpipe's `ui_events` table (typed text, clicked element role/name/value, window title, URL, frame id), `frames.jsonl` has one row per screenshot with the screen text. Both scripts read these files; nothing reads SQLite anymore.
-- `session.json` → `retrospective` holds the typed answers (final goal, could-say-at-start 1–5, change moments, what mattered, carried forward, side tasks, think-aloud effect, naturalness).
+- `session.json` → `retrospective.summary` holds the participant's written summary (goals, what they did, what next). The proposition ratings happen later in a separate pipeline.
 
 ## Known limits
 

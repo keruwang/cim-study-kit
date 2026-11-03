@@ -86,8 +86,8 @@ class GuiDemoFlow(unittest.TestCase):
                 n += 1
             self.assertEqual(n, len(gui.prompts.RETROSPECTIVE))
             sess = json.loads((app.session_dir / "session.json").read_text())
-            self.assertEqual(sess["retrospective"]["could_say_at_start"], 4)
-            self.assertEqual(sess["retrospective"]["changes"], ["line one", "line two"])
+            self.assertEqual(n, 1)
+            self.assertEqual(sess["retrospective"]["summary"], "line one\nline two")
             self.assertEqual(sess["outcome"], "completed")
             # review -> pack -> done
             app.pack()
