@@ -1,105 +1,91 @@
-"""Delete recorded data for one app or one time range from a session's screenpipe folder."""
+"""Delete recorded data for one app or one time range from a session's exported records and media files.
+
+Works on <session>/export/*.jsonl (what the bundle ships) plus the screenshot and audio files they point to.
+The recorder's own index and parquet payloads under screenpipe/storage/ are not shipped; they stay on the
+participant's computer until the session folder is deleted.
+"""
 from __future__ import annotations
 
-import sqlite3
+import json
 from pathlib import Path
 
+from .export import load_jsonl, summarize
 from .timeutil import parse_timestamp
 
 
-def _connect(db: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db), timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _save(path: Path, rows: list[dict]) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def _tables(conn: sqlite3.Connection) -> set[str]:
-    return {r[0] for r in conn.execute("select name from sqlite_master where type='table'")}
-
-
-def _remove_file(data_dir: Path, rel_or_abs: str | None) -> int:
-    if not rel_or_abs:
+def _remove_file(session_dir: Path, rel: str | None) -> int:
+    if not rel:
         return 0
-    p = Path(rel_or_abs)
-    candidates = [p] if p.is_absolute() else [data_dir / p, data_dir / "data" / p]
-    for c in candidates:
-        if c.exists():
-            try:
-                c.unlink()
-                return 1
-            except OSError:
-                return 0
+    p = Path(rel)
+    p = p if p.is_absolute() else session_dir / p
+    if p.exists():
+        try:
+            p.unlink()
+            return 1
+        except OSError:
+            return 0
     return 0
 
 
-def _delete_frames(conn: sqlite3.Connection, data_dir: Path, frame_ids: list[int]) -> dict:
-    removed = {"frames": 0, "files": 0, "ui_events": 0}
-    if not frame_ids:
-        return removed
-    tables = _tables(conn)
-    for i in range(0, len(frame_ids), 500):
-        chunk = frame_ids[i:i + 500]
-        marks = ",".join("?" * len(chunk))
-        for r in conn.execute(f"select snapshot_path from frames where id in ({marks})", chunk):
-            removed["files"] += _remove_file(data_dir, r["snapshot_path"])
-        if "ui_events" in tables:
-            cur = conn.execute(f"delete from ui_events where frame_id in ({marks})", chunk)
-            removed["ui_events"] += cur.rowcount
-        for t in ("elements", "activity_evidence"):
-            if t in tables:
-                try:
-                    conn.execute(f"delete from {t} where frame_id in ({marks})", chunk)
-                except sqlite3.Error:
-                    pass
-        cur = conn.execute(f"delete from frames where id in ({marks})", chunk)
-        removed["frames"] += cur.rowcount
+def _apply(session_dir: Path, frame_pred, event_pred, audio_pred) -> dict:
+    out = session_dir / "export"
+    frames, events, audio = load_jsonl(out / "frames.jsonl"), load_jsonl(out / "ui_events.jsonl"), load_jsonl(out / "audio_chunks.jsonl")
+    removed = {"frames": 0, "files": 0, "ui_events": 0, "audio_chunks": 0}
+    gone_frames = set()
+    keep_frames = []
+    for f in frames:
+        if frame_pred(f):
+            gone_frames.add(f.get("id"))
+            removed["frames"] += 1
+            removed["files"] += _remove_file(session_dir, f.get("snapshot_path"))
+        else:
+            keep_frames.append(f)
+    keep_events = []
+    for e in events:
+        if event_pred(e) or (e.get("frame_id") is not None and e.get("frame_id") in gone_frames):
+            removed["ui_events"] += 1
+        else:
+            keep_events.append(e)
+    keep_audio = []
+    for a in audio:
+        if audio_pred(a):
+            removed["audio_chunks"] += 1
+            removed["files"] += _remove_file(session_dir, a.get("file_path"))
+        else:
+            keep_audio.append(a)
+    _save(out / "frames.jsonl", keep_frames)
+    _save(out / "ui_events.jsonl", keep_events)
+    _save(out / "audio_chunks.jsonl", keep_audio)
+    summary = summarize(session_dir, keep_frames, keep_events, keep_audio)
+    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return removed
 
 
-def redact_app(data_dir: Path, app_substring: str) -> dict:
-    """Remove every frame, screenshot, and input event whose app or window title contains the text."""
-    db = data_dir / "db.sqlite"
-    conn = _connect(db)
-    like = f"%{app_substring.lower()}%"
-    with conn:
-        ids = [r[0] for r in conn.execute(
-            "select id from frames where lower(coalesce(app_name,'')) like ? or lower(coalesce(window_name,'')) like ?", (like, like))]
-        removed = _delete_frames(conn, data_dir, ids)
-        if "ui_events" in _tables(conn):
-            cur = conn.execute(
-                "delete from ui_events where lower(coalesce(app_name,'')) like ? or lower(coalesce(window_title,'')) like ?", (like, like))
-            removed["ui_events"] += cur.rowcount
-    conn.execute("VACUUM")
-    conn.close()
-    return removed
+def redact_app(session_dir: Path, app_substring: str) -> dict:
+    """Remove every screenshot, screen text, and input event whose app or window title contains the text."""
+    needle = app_substring.lower()
+
+    def hit(app, title):
+        return needle in ((app or "") + " " + (title or "")).lower()
+
+    return _apply(session_dir,
+                  lambda f: hit(f.get("app_name"), f.get("window_name")),
+                  lambda e: hit(e.get("app_name"), e.get("window_title")),
+                  lambda a: False)
 
 
-def redact_range(data_dir: Path, start_ts: float, end_ts: float) -> dict:
-    """Remove frames, input events, and audio between two epoch timestamps (inclusive)."""
-    db = data_dir / "db.sqlite"
-    conn = _connect(db)
-    tables = _tables(conn)
-    with conn:
-        ids = [r["id"] for r in conn.execute("select id, timestamp from frames")
-               if start_ts <= parse_timestamp(r["timestamp"]) <= end_ts]
-        removed = _delete_frames(conn, data_dir, ids)
-        if "ui_events" in tables:
-            ev = [r["id"] for r in conn.execute("select id, timestamp from ui_events")
-                  if start_ts <= parse_timestamp(r["timestamp"]) <= end_ts]
-            for i in range(0, len(ev), 500):
-                chunk = ev[i:i + 500]
-                marks = ",".join("?" * len(chunk))
-                removed["ui_events"] += conn.execute(f"delete from ui_events where id in ({marks})", chunk).rowcount
-        removed["audio_chunks"] = 0
-        if "audio_chunks" in tables:
-            chunks = [(r["id"], r["file_path"]) for r in conn.execute("select id, file_path, timestamp from audio_chunks")
-                      if r["timestamp"] is not None and start_ts <= parse_timestamp(r["timestamp"]) <= end_ts]
-            for cid, path in chunks:
-                removed["files"] += _remove_file(data_dir, path)
-                if "audio_transcriptions" in tables:
-                    conn.execute("delete from audio_transcriptions where audio_chunk_id=?", (cid,))
-                conn.execute("delete from audio_chunks where id=?", (cid,))
-                removed["audio_chunks"] += 1
-    conn.execute("VACUUM")
-    conn.close()
-    return removed
+def redact_range(session_dir: Path, start_ts: float, end_ts: float) -> dict:
+    """Remove screenshots, screen text, input events, and audio files between two epoch timestamps (inclusive)."""
+    def within(ts):
+        return ts is not None and start_ts <= parse_timestamp(ts) <= end_ts
+
+    return _apply(session_dir,
+                  lambda f: within(f.get("timestamp")),
+                  lambda e: within(e.get("timestamp")),
+                  lambda a: within(a.get("timestamp")))

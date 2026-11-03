@@ -5,13 +5,12 @@ Uses, in order of preference: mlx_whisper (Apple Silicon), faster_whisper, opena
   pip install mlx-whisper            # macOS Apple Silicon
   pip install faster-whisper         # any platform (CPU ok)
 Audio sources: backup_audio.wav (whole session, preferred when present) or screenpipe's audio chunks (30-s files,
-offset by the chunk timestamp in audio_chunks).
+offset by the chunk timestamp in export/audio_chunks.jsonl).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -74,15 +73,14 @@ def main(argv=None) -> int:
     if backup.exists() and not args.chunks:
         sources.append((parse_timestamp(sess["recording_started_at"]), backup))
     else:
-        db = session_dir / "screenpipe" / "db.sqlite"
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        for file_path, ts in conn.execute("select file_path, timestamp from audio_chunks order by timestamp"):
-            p = Path(file_path)
+        chunks_path = session_dir / "export" / "audio_chunks.jsonl"
+        rows = [json.loads(l) for l in chunks_path.read_text(encoding="utf-8").splitlines() if l.strip()] if chunks_path.exists() else []
+        for r in sorted(rows, key=lambda r: r.get("timestamp") or ""):
+            p = Path(r["file_path"])
             if not p.is_absolute():
-                p = session_dir / "screenpipe" / p
-            if p.exists() and ts:
-                sources.append((parse_timestamp(ts), p))
-        conn.close()
+                p = session_dir / p
+            if p.exists() and r.get("timestamp"):
+                sources.append((parse_timestamp(r["timestamp"]), p))
     if not sources:
         print("no audio found")
         return 1

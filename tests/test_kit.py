@@ -4,15 +4,18 @@ import json
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "researcher"))
 
-from kit import prompts, screenpipe  # noqa: E402
+from kit import export, prompts, screenpipe  # noqa: E402
 from kit.config import DEFAULTS, load_config  # noqa: E402
 from kit.package import make_zip  # noqa: E402
 from kit.redact import redact_app, redact_range  # noqa: E402
@@ -22,60 +25,146 @@ import export_history  # noqa: E402
 
 T0 = "2026-11-02T15:00:00+00:00"
 
+FRAMES = [
+    {"id": 1, "timestamp": "2026-11-02T15:00:05+00:00", "app_name": "Google Chrome", "window_name": "jazz dinner - Google Search",
+     "browser_url": "https://www.google.com/search?q=jazz+dinner", "capture_trigger": "window_focus", "text_source": "accessibility",
+     "focused": True, "device_name": "monitor_1", "snapshot_path": "screenpipe/data/data/2026-11-02/f1.jpg", "text": "Results  for jazz dinner\n Blue Note"},
+    {"id": 2, "timestamp": "2026-11-02T15:00:20+00:00", "app_name": "Google Chrome", "window_name": "jazz dinner - Google Search",
+     "browser_url": "https://www.google.com/search?q=jazz+dinner", "capture_trigger": "idle", "text_source": "accessibility",
+     "focused": True, "device_name": "monitor_1", "snapshot_path": "screenpipe/data/data/2026-11-02/f2.jpg", "text": "Results for jazz dinner Blue Note"},
+    {"id": 3, "timestamp": "2026-11-02T15:03:00+00:00", "app_name": "Slack", "window_name": "#general", "browser_url": "",
+     "capture_trigger": "app_switch", "text_source": "accessibility", "focused": True, "device_name": "monitor_1",
+     "snapshot_path": "screenpipe/data/data/2026-11-02/f3.jpg", "text": "hello there"},
+    {"id": 4, "timestamp": "2026-11-02T15:04:00+00:00", "app_name": "Terminal", "window_name": "study.py", "browser_url": "",
+     "capture_trigger": "window_focus", "text_source": "accessibility", "focused": True, "device_name": "monitor_1",
+     "snapshot_path": "screenpipe/data/data/2026-11-02/f4.jpg", "text": "kit text"},
+]
 
-def make_fake_session(root: Path) -> Path:
-    """A session folder with the screenpipe tables the kit touches, three frames, events, and one audio chunk."""
+
+def ev(i, ts, kind, app=None, title=None, url=None, role=None, name=None, value=None, text=None, key=None, mods=None, button=None, frame=None, dy=None):
+    return {"id": i, "timestamp": ts, "session_id": "s", "relative_ms": 0, "event_type": kind, "x": None, "y": None, "delta_x": None,
+            "delta_y": dy, "button": button, "click_count": None, "key_code": key, "modifiers": mods, "text_content": text,
+            "text_length": len(text) if text else None, "app_name": app, "app_pid": None, "window_title": title, "browser_url": url,
+            "element_role": role, "element_name": name, "element_value": value, "element_description": None, "element_bounds": None,
+            "frame_id": frame}
+
+
+EVENTS = [
+    ev(1, "2026-11-02 15:00:04", "window_focus", "Google Chrome", "jazz dinner - Google Search", "", frame=1),
+    ev(2, "2026-11-02 15:00:10", "text", "Google Chrome", "jazz dinner - Google Search", "", "AXTextField", "Search", text="jazz ", frame=1),
+    ev(3, "2026-11-02 15:00:11", "text", "Google Chrome", "jazz dinner - Google Search", "", "AXTextField", "Search", text="dinner", frame=1),
+    ev(4, "2026-11-02 15:00:12", "key", "Google Chrome", "jazz dinner - Google Search", "", key=36, mods=0, frame=1),
+    ev(5, "2026-11-02 15:00:30", "click", "Google Chrome", "jazz dinner - Google Search", "https://www.google.com/search?q=jazz+dinner",
+       "AXLink", "Blue Note NYC", button=0, frame=2),
+    ev(6, "2026-11-02 15:00:31", "click", "Google Chrome", "jazz dinner - Google Search", "", "AXGroup", "", button=0, frame=2),
+    ev(7, "2026-11-02 15:03:01", "scroll", frame=3, dy=-5),
+    ev(8, "2026-11-02 15:03:05", "scroll", frame=3, dy=-5),
+    ev(9, "2026-11-02 15:04:01", "click", "Terminal", "study.py", "", "AXTextArea", "shell", button=0, frame=4),
+]
+AUDIO = [{"id": 1, "file_path": "screenpipe/data/a1.mp4", "timestamp": "2026-11-02T15:00:00+00:00", "transcription_status": "pending"}]
+
+
+def write_jsonl(path: Path, rows) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def make_fake_session(root: Path, with_index: bool = True) -> Path:
+    """A session folder as the kit leaves it: export/*.jsonl, media files, session.json, and screenpipe internals."""
     session = root / "P1_20261102-1000"
     data = session / "screenpipe"
-    (data / "data" / "2026-11-02").mkdir(parents=True)
-    db = sqlite3.connect(str(data / "db.sqlite"))
-    db.executescript(
-        """
-        create table frames (id integer primary key, timestamp text, app_name text, window_name text, browser_url text,
-            capture_trigger text, text_source text, accessibility_text text, full_text text, snapshot_path text);
-        create table ui_events (id integer primary key, timestamp text, event_type text, app_name text, window_title text,
-            browser_url text, element_role text, element_name text, element_value text, text_content text, key_code int,
-            modifiers int, button int, frame_id int, delta_y int);
-        create table audio_chunks (id integer primary key, file_path text, timestamp text);
-        create table audio_transcriptions (id integer primary key, audio_chunk_id int, timestamp text, transcription text,
-            start_time real, end_time real);
-        """
-    )
-    frames = [
-        (1, "2026-11-02T15:00:05+00:00", "Google Chrome", "jazz dinner - Google Search", "https://www.google.com/search?q=jazz+dinner",
-         "window_focus", "accessibility", "Results  for jazz dinner\n Blue Note", "data/2026-11-02/f1.jpg"),
-        (2, "2026-11-02T15:00:20+00:00", "Google Chrome", "jazz dinner - Google Search", "https://www.google.com/search?q=jazz+dinner",
-         "idle", "accessibility", "Results for jazz dinner Blue Note", "data/2026-11-02/f2.jpg"),
-        (3, "2026-11-02T15:03:00+00:00", "Slack", "#general", "", "app_switch", "accessibility", "hello there", "data/2026-11-02/f3.jpg"),
-        (4, "2026-11-02T15:04:00+00:00", "Terminal", "study.py", "", "window_focus", "accessibility", "kit text", "data/2026-11-02/f4.jpg"),
-    ]
-    for f in frames:
-        db.execute("insert into frames values (?,?,?,?,?,?,?,?,?,?)", f[:7] + (f[7], f[7], f[8]))
-        (data / f[8]).write_bytes(b"jpg")
-    events = [
-        (1, "2026-11-02 15:00:04", "window_focus", "Google Chrome", "jazz dinner - Google Search", "", None, None, None, None, None, None, None, 1, None),
-        (2, "2026-11-02 15:00:10", "text", "Google Chrome", "jazz dinner - Google Search", "", "AXTextField", "Search", None, "jazz ", None, None, None, 1, None),
-        (3, "2026-11-02 15:00:11", "text", "Google Chrome", "jazz dinner - Google Search", "", "AXTextField", "Search", None, "dinner", None, None, None, 1, None),
-        (4, "2026-11-02 15:00:12", "key", "Google Chrome", "jazz dinner - Google Search", "", None, None, None, None, 36, 0, None, 1, None),
-        (5, "2026-11-02 15:00:30", "click", "Google Chrome", "jazz dinner - Google Search", "https://www.google.com/search?q=jazz+dinner",
-         "AXLink", "Blue Note NYC", None, None, None, None, 0, 2, None),
-        (6, "2026-11-02 15:00:31", "click", "Google Chrome", "jazz dinner - Google Search", "", "AXGroup", "", None, None, None, None, 0, 2, None),
-        (7, "2026-11-02 15:03:01", "scroll", None, None, None, None, None, None, None, None, None, None, 3, -5),
-        (8, "2026-11-02 15:03:05", "scroll", None, None, None, None, None, None, None, None, None, None, 3, -5),
-        (9, "2026-11-02 15:04:01", "click", "Terminal", "study.py", "", "AXTextArea", "shell", None, None, None, None, 0, 4, None),
-    ]
-    db.executemany("insert into ui_events values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", events)
-    (data / "data" / "2026-11-02" / "a1.mp4").write_bytes(b"audio")
-    db.execute("insert into audio_chunks values (1, 'data/2026-11-02/a1.mp4', '2026-11-02T15:00:00+00:00')")
-    db.execute("insert into audio_transcriptions values (1, 1, '2026-11-02T15:00:00+00:00', 'I want jazz and dinner', 2.0, 4.0)")
-    db.commit()
-    db.close()
+    (data / "data" / "data" / "2026-11-02").mkdir(parents=True)
+    for f in FRAMES:
+        (session / f["snapshot_path"]).write_bytes(b"jpg")
+    (session / AUDIO[0]["file_path"]).write_bytes(b"audio")
+    write_jsonl(session / "export" / "frames.jsonl", FRAMES)
+    write_jsonl(session / "export" / "ui_events.jsonl", EVENTS)
+    write_jsonl(session / "export" / "audio_chunks.jsonl", AUDIO)
+    (session / "export" / "summary.json").write_text(json.dumps(export.summarize(session, FRAMES, EVENTS, AUDIO)))
+    if with_index:  # the recorder's own index, as screenpipe 0.4.55 lays it out
+        gen = data / "storage" / "gen1"
+        gen.mkdir(parents=True)
+        (data / "storage.json").write_text(json.dumps({"format": 1, "mode": "hybrid-parquet-v1", "index": "storage/gen1/index.sqlite"}))
+        db = sqlite3.connect(str(gen / "index.sqlite"))
+        db.executescript("create table frames (id integer primary key, timestamp text, app_name text, browser_url text);"
+                         "create table ui_events (id integer primary key, event_type text, text_content text, text_length int);"
+                         "create table audio_chunks (id integer primary key, file_path text, timestamp text);")
+        db.executemany("insert into frames values (?,?,?,?)", [(f["id"], f["timestamp"], f["app_name"], f["browser_url"]) for f in FRAMES])
+        db.executemany("insert into ui_events values (?,?,?,?)", [(e["id"], e["event_type"], None if e["event_type"] == "text" else e["text_content"], e["text_length"]) for e in EVENTS])
+        db.execute("insert into audio_chunks values (1, 'x', 'y')")
+        db.commit()
+        db.close()
+        (gen / "payloads").mkdir()
+        (gen / "payloads" / "p.parquet").write_bytes(b"parquet")
     (data / "secrets.sqlite").write_bytes(b"secret")
     (data / "pipes").mkdir()
     (data / "pipes" / "x.json").write_text("{}")
     (session / "session.json").write_text(json.dumps({"participant": "P1", "recording_started_at": T0, "created_at": T0}))
     (session / "checkpoints.jsonl").write_text(json.dumps({"kind": "checkpoint", "n": 1, "minute": 10, "at": "2026-11-02T15:10:00+00:00"}) + "\n")
     return session
+
+
+class FakeDaemon(BaseHTTPRequestHandler):
+    """Answers /search (ocr) and /raw_sql the way screenpipe 0.4.55 does, with absolute media paths."""
+    base: Path = Path("/")
+    key = "kit-test"
+
+    def log_message(self, *a):  # silence
+        pass
+
+    def _send(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _auth(self):
+        if self.headers.get("Authorization") != f"Bearer {self.key}":
+            self._send(403, {"error": "unauthorized"})
+            return False
+        return True
+
+    def do_GET(self):
+        if not self._auth():
+            return
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/search" and q.get("content_type") == ["ocr"]:
+            limit, offset = int(q["limit"][0]), int(q["offset"][0])
+            items = [{"type": "OCR", "content": {"frame_id": f["id"], "text": f["text"], "timestamp": f["timestamp"], "file_path": str(self.base / f["snapshot_path"]),
+                                                   "app_name": f["app_name"], "window_name": f["window_name"], "browser_url": f["browser_url"],
+                                                   "focused": True, "device_name": "monitor_1", "text_source": "accessibility", "event_source": f["capture_trigger"]}}
+                     for f in FRAMES]
+            self._send(200, {"data": items[offset:offset + limit], "pagination": {"limit": limit, "offset": offset, "total": len(items)}})
+        else:
+            self._send(200, {"data": [], "pagination": {"total": 0}})
+
+    def do_POST(self):
+        if not self._auth():
+            return
+        n = int(self.headers.get("Content-Length", 0))
+        q = json.loads(self.rfile.read(n))["query"].lower()
+        if "limit" not in q:
+            self._send(400, {"error": "SELECT without LIMIT"})
+            return
+        last = int(q.split("id >")[1].split()[0]) if "id >" in q else 0
+        limit = int(q.rsplit("limit", 1)[1].split()[0])
+        if "_bulk_logical_ui_events" in q:
+            rows = [{k: e[k] for k in export.UI_EVENT_COLUMNS} for e in EVENTS if e["id"] > last][:limit]
+        elif "from ui_events" in q:
+            self._send(500, {"error": "should use the logical view"})
+            return
+        elif "from frames" in q:
+            rows = [{"id": f["id"], "timestamp": f["timestamp"], "app_name": f["app_name"], "window_name": f["window_name"], "browser_url": f["browser_url"],
+                     "capture_trigger": f["capture_trigger"], "text_source": "accessibility", "snapshot_path": str(self.base / f["snapshot_path"]),
+                     "focused": 1, "device_name": "monitor_1"} for f in FRAMES if f["id"] > last]
+        elif "from audio_chunks" in q:
+            rows = [{"id": 1, "file_path": str(self.base / AUDIO[0]["file_path"]), "timestamp": AUDIO[0]["timestamp"], "transcription_status": "pending"}]
+            rows = [r for r in rows if r["id"] > last]
+        else:
+            rows = []
+        self._send(200, rows)
 
 
 class UnitTests(unittest.TestCase):
@@ -85,6 +174,7 @@ class UnitTests(unittest.TestCase):
         self.assertEqual(parse_timestamp("2026-11-02T15:00:00Z"), a)
         self.assertAlmostEqual(parse_timestamp("2026-11-02T15:00:00.566921+00:00"), a + 0.566921, places=5)
         self.assertEqual(parse_timestamp("2026-11-02 15:00:00 UTC"), a)
+        self.assertEqual(parse_timestamp("2026-11-02T10:00:00-05:00"), a)  # the API answers in local time
 
     def test_config_defaults_and_override(self):
         with tempfile.TemporaryDirectory() as d:
@@ -122,54 +212,110 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(set(f["axes"]), {"fuzziness", "predictability", "expertise"})
             self.assertTrue(f["examples"])
         self.assertIn("{every}", prompts.THINK_ALOUD)
+        self.assertNotIn("terminal", prompts.END_SPOKEN.lower())
         for item in prompts.RETROSPECTIVE:
             self.assertIn(item["kind"], ("text", "int1to5", "list"))
 
+    def test_api_key_env(self):
+        self.assertTrue(screenpipe.new_api_key().startswith("kit-"))
+        self.assertNotEqual(screenpipe.new_api_key(), screenpipe.new_api_key())
+
 
 class SessionFolderTests(unittest.TestCase):
-    def test_capture_stats(self):
+    def test_db_path_and_capture_stats_on_hybrid_index(self):
         with tempfile.TemporaryDirectory() as d:
             session = make_fake_session(Path(d))
-            stats = screenpipe.capture_stats(session / "screenpipe")
-        self.assertEqual(stats["frames"], 4)
-        self.assertEqual(stats["ui_events"]["click"], 3)
-        self.assertEqual(stats["typed_chars"], len("jazz dinner"))
-        self.assertEqual(stats["audio_files"], 1)
-        self.assertEqual(stats["apps"][0][0], "Google Chrome")
-        self.assertEqual(stats["domains"][0][0], "www.google.com")
+            data = session / "screenpipe"
+            self.assertEqual(screenpipe.db_path(data), data / "storage" / "gen1" / "index.sqlite")
+            stats = screenpipe.capture_stats(data)
+            self.assertEqual(stats["frames"], 4)
+            self.assertEqual(stats["ui_events"]["click"], 3)
+            self.assertEqual(stats["typed_chars"], len("jazz dinner"))  # text_content archived; text_length still counts
+            self.assertEqual(stats["audio_files"], 1)
+            self.assertEqual(stats["apps"][0][0], "Google Chrome")
+            self.assertEqual(stats["domains"][0][0], "www.google.com")
+            self.assertEqual(screenpipe.db_path(Path(d) / "nothing"), Path(d) / "nothing" / "db.sqlite")
 
-    def test_zip_excludes_internals(self):
+    def test_stats_from_export(self):
+        with tempfile.TemporaryDirectory() as d:
+            session = make_fake_session(Path(d), with_index=False)
+            s = export.stats_from_export(session)
+        self.assertEqual(s["frames"], 4)
+        self.assertEqual(s["ui_events"]["scroll"], 2)
+        self.assertEqual(s["typed_chars"], len("jazz dinner"))
+        self.assertEqual(s["audio_files"], 1)
+
+    def test_export_session_via_fake_daemon(self):
+        with tempfile.TemporaryDirectory() as d:
+            session = Path(d) / "P2_x"
+            (session / "screenpipe" / "data" / "data" / "2026-11-02").mkdir(parents=True)
+            for f in FRAMES:
+                (session / f["snapshot_path"]).write_bytes(b"jpg")
+            (session / AUDIO[0]["file_path"]).write_bytes(b"audio")
+            FakeDaemon.base = session
+            srv = HTTPServer(("127.0.0.1", 0), FakeDaemon)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                with self.assertRaises(export.ApiError):
+                    export.export_session(srv.server_port, "wrong-key", session, parse_timestamp(T0), parse_timestamp(T0) + 600)
+                stats = export.export_session(srv.server_port, FakeDaemon.key, session, parse_timestamp(T0), parse_timestamp(T0) + 600)
+                paged = export.raw_sql_all(srv.server_port, FakeDaemon.key, "_bulk_logical_ui_events", export.UI_EVENT_COLUMNS, page=2)
+            finally:
+                srv.shutdown()
+            events = export.load_jsonl(session / "export" / "ui_events.jsonl")
+            frames = export.load_jsonl(session / "export" / "frames.jsonl")
+            audio = export.load_jsonl(session / "export" / "audio_chunks.jsonl")
+        self.assertEqual([e["id"] for e in events], list(range(1, 10)))
+        self.assertEqual([e["id"] for e in paged], list(range(1, 10)))  # paged 2 at a time, nothing lost or doubled
+        self.assertEqual(events[1]["text_content"], "jazz ")
+        self.assertEqual(len(frames), 4)
+        self.assertEqual(frames[0]["snapshot_path"], "screenpipe/data/data/2026-11-02/f1.jpg")  # made relative
+        self.assertEqual(frames[0]["text"], FRAMES[0]["text"])
+        self.assertEqual(frames[0]["capture_trigger"], "window_focus")
+        self.assertEqual(audio[0]["file_path"], "screenpipe/data/a1.mp4")
+        self.assertEqual(stats["frames"], 4)
+        self.assertEqual(stats["audio_files"], 1)
+        self.assertEqual(stats["typed_chars"], len("jazz dinner"))
+
+    def test_zip_ships_export_and_media_not_internals(self):
         with tempfile.TemporaryDirectory() as d:
             session = make_fake_session(Path(d))
             z = make_zip(session)
             names = zipfile.ZipFile(z).namelist()
-        self.assertTrue(any(n.endswith("screenpipe/db.sqlite") for n in names))
+        self.assertTrue(any(n.endswith("export/ui_events.jsonl") for n in names))
+        self.assertTrue(any(n.endswith("export/frames.jsonl") for n in names))
         self.assertTrue(any(n.endswith("f1.jpg") for n in names))
+        self.assertTrue(any(n.endswith("a1.mp4") for n in names))
         self.assertTrue(any(n.endswith("session.json") for n in names))
         self.assertFalse(any("secrets.sqlite" in n for n in names))
         self.assertFalse(any("/pipes/" in n for n in names))
+        self.assertFalse(any("/storage/" in n or n.endswith("storage.json") for n in names))  # index + parquet stay local
 
     def test_redact_app_and_range(self):
         with tempfile.TemporaryDirectory() as d:
             session = make_fake_session(Path(d))
-            data = session / "screenpipe"
-            removed = redact_app(data, "slack")
+            removed = redact_app(session, "slack")
             self.assertEqual(removed["frames"], 1)
-            self.assertFalse((data / "data/2026-11-02/f3.jpg").exists())
-            stats = screenpipe.capture_stats(data)
+            self.assertFalse((session / "screenpipe/data/data/2026-11-02/f3.jpg").exists())
+            stats = export.stats_from_export(session)
             self.assertEqual(stats["frames"], 3)
             self.assertNotIn("scroll", stats["ui_events"])  # scroll rows hung off the Slack frame
-            removed = redact_range(data, parse_timestamp("2026-11-02T15:00:00+00:00"), parse_timestamp("2026-11-02T15:01:00+00:00"))
+            removed = redact_range(session, parse_timestamp("2026-11-02T15:00:00+00:00"), parse_timestamp("2026-11-02T15:01:00+00:00"))
             self.assertEqual(removed["frames"], 2)
             self.assertEqual(removed["audio_chunks"], 1)
-            self.assertFalse((data / "data/2026-11-02/a1.mp4").exists())
-            stats = screenpipe.capture_stats(data)
+            self.assertEqual(removed["ui_events"], 6)
+            self.assertFalse((session / "screenpipe/data/a1.mp4").exists())
+            stats = export.stats_from_export(session)
             self.assertEqual(stats["frames"], 1)
             self.assertEqual(stats["audio_chunks"], 0)
+            self.assertEqual(json.loads((session / "export" / "summary.json").read_text())["frames"], 1)
 
     def test_export_history(self):
         with tempfile.TemporaryDirectory() as d:
             session = make_fake_session(Path(d))
+            (session / "derived").mkdir()
+            (session / "derived" / "transcript.jsonl").write_text(json.dumps({"start_ts": parse_timestamp(T0) + 2, "end_ts": parse_timestamp(T0) + 4,
+                                                                             "text": "I want jazz and dinner", "source": "backup_audio.wav"}) + "\n")
             rc = export_history.main([str(session)])
             self.assertEqual(rc, 0)
             derived = session / "derived"

@@ -80,11 +80,22 @@ def parse_doctor(text: str) -> list[str]:
     return missing
 
 
-def start_recorder(cfg: dict, data_dir: Path, port: int, log_path: Path, audio: bool = True) -> subprocess.Popen:
+def new_api_key() -> str:
+    import secrets
+
+    return "kit-" + secrets.token_hex(16)
+
+
+def start_recorder(cfg: dict, data_dir: Path, port: int, log_path: Path, audio: bool = True,
+                   api_key: str | None = None) -> subprocess.Popen:
+    """Start screenpipe. `api_key` (per session, never written to disk) lets the kit read the daemon's API later."""
     data_dir.mkdir(parents=True, exist_ok=True)
     cmd = base_command(cfg) + build_record_args(cfg, data_dir, port, audio=audio)
     log = open(log_path, "ab")
-    kwargs = {"stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+    env = dict(os.environ)
+    if api_key:
+        env["SCREENPIPE_API_KEY"] = api_key
+    kwargs = {"stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "env": env}
     if SYSTEM == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
     else:
@@ -144,6 +155,15 @@ def port_in_use(port: int) -> bool:
 
 
 def db_path(data_dir: Path) -> Path:
+    """screenpipe >= 0.4.5x: storage.json points at storage/<generation>/index.sqlite. Older: db.sqlite."""
+    desc = data_dir / "storage.json"
+    if desc.exists():
+        try:
+            rel = json.loads(desc.read_text(encoding="utf-8")).get("index")
+            if rel:
+                return data_dir / rel
+        except (OSError, ValueError):
+            pass
     return data_dir / "db.sqlite"
 
 
@@ -161,7 +181,8 @@ def _count(conn: sqlite3.Connection, sql: str, params=()) -> int:
 
 
 def capture_stats(data_dir: Path) -> dict:
-    """Counts and the apps/domains seen. Safe to call while screenpipe is running (WAL, read-only)."""
+    """Counts and the apps/domains seen, read from the index while screenpipe runs (read-only).
+    Text columns may already be archived to parquet, so this is for counts only; export.py has the full rows."""
     stats = {"frames": 0, "ui_events": {}, "audio_chunks": 0, "audio_files": 0, "apps": [], "domains": [], "typed_chars": 0}
     db = db_path(data_dir)
     audio_exts = {".mp4", ".wav", ".m4a", ".mp3", ".ogg", ".flac"}
@@ -178,7 +199,7 @@ def capture_stats(data_dir: Path) -> dict:
         try:
             rows = conn.execute("select event_type, count(*) c from ui_events group by 1").fetchall()
             stats["ui_events"] = {r["event_type"]: r["c"] for r in rows}
-            stats["typed_chars"] = _count(conn, "select coalesce(sum(length(text_content)),0) from ui_events where event_type='text'")
+            stats["typed_chars"] = _count(conn, "select coalesce(sum(coalesce(text_length, length(text_content))),0) from ui_events where event_type='text'")
         except sqlite3.Error:
             pass
         try:
@@ -213,7 +234,7 @@ def wait_for_capture(data_dir: Path, need_audio: bool, timeout: float = 90.0, po
 
 
 def wal_checkpoint(db: Path) -> None:
-    """Fold the WAL into the main file so a copied db.sqlite is complete on its own."""
+    """Fold the WAL into the main file so a copied database is complete on its own."""
     if not db.exists():
         return
     try:

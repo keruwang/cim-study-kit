@@ -42,7 +42,9 @@ WHAT HAPPENS TO IT
   Before that, you see a summary of the apps and websites recorded and can
   delete any app or time range. After upload, only the study team can read
   it; it is used to study how people's goals take shape while they work.
-  You can stop at any time with Ctrl+C and choose not to upload.
+  You can stop at any time with the "End session now" button and choose
+  not to upload. The raw recording folder stays on this computer until you
+  delete it.
 
 Full text: CONSENT.md in this folder. Questions: {contact}.
 """
@@ -63,9 +65,9 @@ CHECKPOINTS
   Then carry on. Do not stop working.
 
 ENDING
-  At {minutes} minutes you hear "time is up". Finish your thought,
-  come back to this terminal window, and press Enter. A few typed
-  questions follow (about 5 minutes), then the review and the upload.
+  At {minutes} minutes you hear "time is up". Finish your thought and
+  come back to the study window. A few typed questions follow (about
+  5 minutes), then the review and the upload.
 """
 
 TASK_INTRO = """
@@ -93,7 +95,7 @@ CHECKPOINT_TITLE = "Checkpoint {n}"
 NUDGE_SPOKEN = "Reminder: if you listed a small side task, you may handle it whenever it suits you. Or ignore this."
 START_SPOKEN = "Recording has started. Please begin, and remember to think aloud."
 WRAP_UP_SPOKEN = "Two minutes left. Start wrapping up your thought."
-END_SPOKEN = "Time is up. Please finish your sentence, then come back to the terminal and press Enter."
+END_SPOKEN = "Time is up. Please finish your sentence, then come back to the study window."
 
 # Retrospective questions. kind: text | int1to5 | yesno | list
 RETROSPECTIVE = [
@@ -121,6 +123,8 @@ REVIEW_INTRO = """
 REVIEW BEFORE UPLOAD
   Below is what was recorded: the apps, the most common websites, and counts.
   You can delete everything from one app, or everything in a time range.
+  Deleting removes the screenshots, screen text, input events, and audio
+  for that part from the bundle.
 """
 
 UPLOAD_INSTRUCTIONS = """

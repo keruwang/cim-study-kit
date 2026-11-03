@@ -4,7 +4,7 @@
 Outputs (in <session>/derived/):
   history_events.txt        what the user did (clicks, typing, app switches, scrolls)      = the ablation baseline
   history_events_views.txt  the same, plus what was on screen at focus/scroll/idle captures
-  think_aloud.txt           transcript lines with clock times (from screenpipe or transcript.jsonl); never shown to the model
+  think_aloud.txt           transcript lines with clock times (from derived/transcript.jsonl); never shown to the model
   checkpoints.txt           the cue times, to align model probes with the participant's checkpoint sentences
   summary.json              counts
 """
@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sqlite3
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -39,24 +38,18 @@ def host_of(url: str | None) -> str:
         return ""
 
 
-def load_rows(db: Path):
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    frames = [dict(r) for r in conn.execute(
-        "select id, timestamp, app_name, window_name, browser_url, capture_trigger, text_source, "
-        "coalesce(accessibility_text, full_text, '') as text from frames order by timestamp")]
-    events = [dict(r) for r in conn.execute(
-        "select id, timestamp, event_type, app_name, window_title, browser_url, element_role, element_name, element_value, "
-        "text_content, key_code, modifiers, button, frame_id, delta_y from ui_events order by timestamp, id")]
-    transcript = []
-    try:
-        transcript = [dict(r) for r in conn.execute(
-            "select t.timestamp, t.transcription, t.start_time, t.end_time, c.timestamp as chunk_ts "
-            "from audio_transcriptions t left join audio_chunks c on c.id = t.audio_chunk_id order by t.timestamp")]
-    except sqlite3.Error:
-        pass
-    conn.close()
-    return frames, events, transcript
+def load_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def load_rows(session_dir: Path):
+    """The bundle's export/*.jsonl (written by kit/export.py from the daemon's API at the end of the session)."""
+    out = session_dir / "export"
+    frames = sorted(load_jsonl(out / "frames.jsonl"), key=lambda f: parse_timestamp(f["timestamp"]))
+    events = sorted(load_jsonl(out / "ui_events.jsonl"), key=lambda e: (parse_timestamp(e["timestamp"]), e.get("id") or 0))
+    return frames, events
 
 
 def event_lines(events: list[dict], frames_by_id: dict, exclude: list[str], t0: float, tz_offset: float) -> list[tuple[float, str]]:
@@ -136,7 +129,8 @@ def view_lines(frames: list[dict], exclude: list[str], t0: float, excerpt: int, 
     return out
 
 
-def transcript_lines(session_dir: Path, transcript_rows: list[dict], t0: float) -> list[tuple[float, str]]:
+def transcript_lines(session_dir: Path, t0: float) -> list[tuple[float, str]]:
+    """From derived/transcript.jsonl (researcher/transcribe.py). Participant machines do not transcribe."""
     out = []
     external = session_dir / "derived" / "transcript.jsonl"
     if external.exists():
@@ -145,12 +139,6 @@ def transcript_lines(session_dir: Path, transcript_rows: list[dict], t0: float) 
                 continue
             d = json.loads(line)
             out.append((float(d["start_ts"]), d["text"].strip()))
-        return sorted(out)
-    for r in transcript_rows:
-        base = parse_timestamp(r.get("chunk_ts") or r["timestamp"])
-        ts = base + float(r.get("start_time") or 0.0)
-        if ts >= t0 and (r.get("transcription") or "").strip():
-            out.append((ts, r["transcription"].strip()))
     return sorted(out)
 
 
@@ -170,13 +158,13 @@ def main(argv=None) -> int:
     ap.add_argument("--dedup-seconds", type=float, default=60.0)
     args = ap.parse_args(argv)
     session_dir = Path(args.session_dir)
-    db = session_dir / "screenpipe" / "db.sqlite"
-    if not db.exists():
-        print(f"no db at {db}")
+    if not (session_dir / "export" / "frames.jsonl").exists():
+        print(f"no export/frames.jsonl in {session_dir} (the kit writes it at the end of a session)")
         return 1
     sess = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
     t0 = parse_timestamp(sess.get("recording_started_at") or sess.get("created_at"))
-    frames, events, transcript = load_rows(db)
+    frames, events = load_rows(session_dir)
+    transcript = transcript_lines(session_dir, t0)
     frames_by_id = {f["id"]: f for f in frames}
     ev = event_lines(events, frames_by_id, args.exclude, t0, 0.0)
     views = view_lines(frames, args.exclude, t0, args.excerpt, args.dedup_seconds)
@@ -184,7 +172,7 @@ def main(argv=None) -> int:
     derived.mkdir(exist_ok=True)
     write_lines(derived / "history_events.txt", ev, t0)
     write_lines(derived / "history_events_views.txt", ev + views, t0)
-    write_lines(derived / "think_aloud.txt", transcript_lines(session_dir, transcript, t0), t0)
+    write_lines(derived / "think_aloud.txt", transcript, t0)
     cps = []
     cp_path = session_dir / "checkpoints.jsonl"
     if cp_path.exists():

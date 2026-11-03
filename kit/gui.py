@@ -16,6 +16,7 @@ from tkinter import messagebox, scrolledtext, ttk
 from . import notify, prompts, screenpipe
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
+from .export import ApiError, export_session, stats_from_export
 from .redact import redact_app, redact_range
 from .session import append_jsonl, checkpoint_minutes, start_backup_audio, stop_backup_audio, write_json
 from .timeutil import iso_utc
@@ -37,6 +38,8 @@ class StudyApp:
         self.session_dir: Path | None = None
         self.data_dir: Path | None = None
         self.proc = None
+        self.api_key = None
+        self.rec_start = None
         self.backup = None
         self.events: "queue.Queue[tuple]" = queue.Queue()
         self.fired: set = set()
@@ -225,8 +228,9 @@ class StudyApp:
             if screenpipe.port_in_use(self.cfg["screenpipe_port"]):
                 self.events.put(("failed", f"Port {self.cfg['screenpipe_port']} is in use. Quit any running screenpipe and try again."))
                 return
+            self.api_key = screenpipe.new_api_key()
             self.proc = screenpipe.start_recorder(self.cfg, self.data_dir, self.cfg["screenpipe_port"],
-                                                  self.session_dir / "screenpipe.log", audio=True)
+                                                  self.session_dir / "screenpipe.log", audio=True, api_key=self.api_key)
             stats = screenpipe.wait_for_capture(self.data_dir, need_audio=True, timeout=90)
             if stats["frames"] == 0:
                 screenpipe.stop_recorder(self.proc)
@@ -254,6 +258,7 @@ class StudyApp:
             self.backup = start_backup_audio(self.session_dir)
             self.session["backup_audio"] = self.backup is not None
         self.start_ts = time.time()
+        self.rec_start = self.start_ts
         self.session["recording_started_at"] = iso_utc(self.start_ts)
         write_json(self.session_dir / "session.json", self.session)
         self.show_recording(warn)
@@ -369,14 +374,20 @@ class StudyApp:
         write_json(self.session_dir / "session.json", self.session)
         self.clear()
         self.root.configure(bg=self.default_bg)
-        self.heading("Stopping the recorder")
-        ttk.Label(self.container, text="Please wait a few seconds ...").pack(anchor="w", **PAD)
+        self.heading("Saving the recording")
+        ttk.Label(self.container, text="Collecting the records from the recorder, then stopping it. This can take a minute ...",
+                  wraplength=480).pack(anchor="w", **PAD)
 
         def stop():
             stop_backup_audio(self.backup)
             if self.proc is not None:
+                try:
+                    stats = export_session(self.cfg["screenpipe_port"], self.api_key, self.session_dir, self.rec_start)
+                    self.session["export"] = {k: stats[k] for k in ("frames", "ui_events", "audio_chunks", "audio_files", "typed_chars")}
+                except (ApiError, OSError, ValueError) as exc:
+                    self.session["export_error"] = str(exc)
                 screenpipe.stop_recorder(self.proc)
-                screenpipe.wal_checkpoint(self.data_dir / "db.sqlite")
+                write_json(self.session_dir / "session.json", self.session)
             self.events.put(("stopped", None))
 
         threading.Thread(target=stop, daemon=True).start()
@@ -388,6 +399,9 @@ class StudyApp:
         except queue.Empty:
             self.later(500, self._poll_stop)
             return
+        if self.session.get("export_error"):
+            messagebox.showwarning("Recording", "The kit could not read the records back from the recorder:\n"
+                                   + self.session["export_error"] + "\n\nThe raw recording folder is kept; please tell the study team.")
         self.retro_index = 0
         self.retro_answers = {}
         self.show_retro_question()
@@ -435,7 +449,7 @@ class StudyApp:
     def stats_text(self) -> str:
         if self.demo:
             return "(demo mode: nothing was recorded)"
-        s = screenpipe.capture_stats(self.data_dir)
+        s = stats_from_export(self.session_dir) or screenpipe.capture_stats(self.data_dir)
         lines = [f"screenshots: {s['frames']}    input events: {s['ui_events'] or 'none'}    typed characters: {s['typed_chars']}",
                  f"audio files: {s['audio_files']}", "", "apps recorded:"]
         lines += [f"  {n:5d}  {app}" for app, n in s["apps"][:25]]
@@ -476,7 +490,7 @@ class StudyApp:
         if not name or self.demo:
             return
         if messagebox.askyesno("Delete", f"Delete everything matching '{name}'?"):
-            removed = redact_app(self.data_dir, name)
+            removed = redact_app(self.session_dir, name)
             self.session.setdefault("redactions", []).append({"kind": "app", "match": name, "removed": removed, "at": iso_utc()})
             write_json(self.session_dir / "session.json", self.session)
             self._refresh_review()
@@ -491,7 +505,7 @@ class StudyApp:
             messagebox.showwarning("Range", "Enter two numbers of minutes, e.g. 12 and 18.")
             return
         if messagebox.askyesno("Delete", f"Delete minutes {a:g}-{b:g} (screen, input, and audio)?"):
-            removed = redact_range(self.data_dir, start + a * self.minute_s, start + b * self.minute_s)
+            removed = redact_range(self.session_dir, start + a * self.minute_s, start + b * self.minute_s)
             wav = self.session_dir / "backup_audio.wav"
             if wav.exists():
                 wav.unlink()
@@ -531,7 +545,8 @@ class StudyApp:
         text = (f"The session is packed into one file:\n{z}\n\nSize: {size_mb:.1f} MB\nSHA-256: {digest}\n\n"
                 f"1. Press 'Open upload page' (or use this link): {url or '(no link configured; send the file to the study team)'}\n"
                 "2. Drag the zip file into it ('Show file' reveals it).\n"
-                "3. Tell the study team the file name. Keep the local copy until they confirm.\n\nThank you.")
+                "3. Tell the study team the file name. Keep the local copy until they confirm.\n\n"
+                "The raw recording folder stays on this computer (sessions/ in the kit folder) until you delete it.\n\nThank you.")
         self.para(text, height=14)
         self.button_row(("Close", self.root.destroy), ("Show file", lambda: reveal(z)), ("Open upload page", lambda: open_url(url)))
         reveal(z)

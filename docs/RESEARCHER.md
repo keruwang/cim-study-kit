@@ -19,7 +19,8 @@ python3 researcher/export_history.py incoming/P07_20261103-1402      # writes de
 - `history_events.txt` is the events-only condition (what the old accessibility daemon gave). `history_events_views.txt` adds what was on screen at focus / scroll-stop / idle captures. That pair is the input ablation.
 - `think_aloud.txt` is the reference. It is never part of the model input.
 - `checkpoints.txt` gives the exact times of the chimes; the participant's one-sentence answers are in the transcript right after each cue, and the spoken cue itself appears in the transcript as a marker.
-- The screenshots stay in `screenpipe/data/<date>/*.jpg` for a replay (`npx screenpipe@0.4.55 export --data-dir <session>/screenpipe --start ... --end ...` makes an MP4 with synced audio) and for later screenshot-input conditions.
+- The screenshots stay in `screenpipe/data/data/<date>/*.jpg` (paths in `export/frames.jsonl`) for a replay and for later screenshot-input conditions. A replay can be assembled from the frames and `backup_audio.wav` with ffmpeg; screenpipe's own `export` subcommand still expects the old `db.sqlite` layout and does not work on 0.4.55 bundles.
+- `export/*.jsonl` is the full record: `ui_events.jsonl` has every column of screenpipe's `ui_events` table (typed text, clicked element role/name/value, window title, URL, frame id), `frames.jsonl` has one row per screenshot with the screen text. Both scripts read these files; nothing reads SQLite anymore.
 - `session.json` → `retrospective` holds the typed answers (final goal, could-say-at-start 1–5, change moments, what mattered, carried forward, side tasks, think-aloud effect, naturalness).
 
 ## Known limits
@@ -27,5 +28,5 @@ python3 researcher/export_history.py incoming/P07_20261103-1402      # writes de
 - screenpipe's CLI attaches macOS permissions to the terminal app the participant uses. If they switch terminal apps, permissions must be granted again.
 - Typed text is recorded (`--disable-keyboard-capture false`). Participants are told not to type passwords; the deny list hides password managers; private browser windows are skipped.
 - Windows: no backup WAV (screenpipe audio only); spoken cues use the built-in voice.
-- The `redact` step deletes rows and files but the SQLite file is vacuumed, not securely wiped.
+- The `redact` step removes rows from `export/*.jsonl` and deletes the screenshot and audio files. The recorder's own index and parquet payloads under `screenpipe/storage/` are not shipped and are not touched; they stay on the participant's machine until the `sessions/` folder is deleted (the kit tells participants this).
 - Audio transcription is off on the participant's machine on purpose (no model download, less CPU). Transcribe on our side.

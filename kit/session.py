@@ -13,8 +13,9 @@ from pathlib import Path
 from . import notify, prompts, screenpipe
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
+from .export import ApiError, export_session, stats_from_export
 from .redact import redact_app, redact_range
-from .timeutil import iso_utc, local_clock
+from .timeutil import iso_utc, local_clock, parse_timestamp
 
 SYSTEM = platform.system()
 
@@ -222,7 +223,7 @@ def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool) ->
     cp_path = session_dir / "checkpoints.jsonl"
     notify.cue("Recording started", prompts.START_SPOKEN)
     say(f"[{local_clock(start)}] Recording. Session length {minutes} min; checkpoints at {checkpoints} min.")
-    say("You can leave this window. Press Ctrl+C here if you must stop early.")
+    say("You can leave this window. Press Ctrl+C here if you must stop early.")  # terminal flow only
     last_printed = -1
     while True:
         try:
@@ -286,11 +287,11 @@ def print_stats(stats: dict) -> None:
             say(f"    {n:5d}  {host}")
 
 
-def review_and_redact(data_dir: Path, session: dict) -> list[dict]:
+def review_and_redact(session_dir: Path, session: dict) -> list[dict]:
     say(prompts.REVIEW_INTRO)
     actions = []
     while True:
-        print_stats(screenpipe.capture_stats(data_dir))
+        print_stats(stats_from_export(session_dir) or screenpipe.capture_stats(session_dir / "screenpipe"))
         say("")
         say("Delete something?  [a] everything from an app   [t] a time range   [Enter] nothing, continue")
         v = ask("Choice").lower()
@@ -299,7 +300,7 @@ def review_and_redact(data_dir: Path, session: dict) -> list[dict]:
         if v == "a":
             name = ask("App or window-title text to delete (case-insensitive)")
             if name and ask_yes(f"Delete everything matching '{name}'?"):
-                removed = redact_app(data_dir, name)
+                removed = redact_app(session_dir, name)
                 actions.append({"kind": "app", "match": name, "removed": removed, "at": iso_utc()})
                 say(f"  removed: {removed}")
         elif v == "t":
@@ -313,12 +314,12 @@ def review_and_redact(data_dir: Path, session: dict) -> list[dict]:
                 say("  could not read those numbers")
                 continue
             if ask_yes(f"Delete minutes {a}-{b} (screen, input, and audio)?"):
-                removed = redact_range(data_dir, lo, hi)
+                removed = redact_range(session_dir, lo, hi)
                 actions.append({"kind": "range", "from_min": a, "to_min": b, "removed": removed, "at": iso_utc()})
                 say(f"  removed: {removed}")
-                if (data_dir.parent / "backup_audio.wav").exists():
+                if (session_dir / "backup_audio.wav").exists():
                     say("  note: the backup audio file covers the whole session; deleting it too.")
-                    (data_dir.parent / "backup_audio.wav").unlink()
+                    (session_dir / "backup_audio.wav").unlink()
 
 
 def package_and_upload(cfg: dict, session_dir: Path) -> Path:
@@ -385,7 +386,8 @@ def run_session(cfg: dict, args) -> int:
     write_json(session_dir / "session.json", session)
 
     say("Starting the recorder (first start can take 20-30 s) ...")
-    proc = screenpipe.start_recorder(cfg, data_dir, cfg["screenpipe_port"], session_dir / "screenpipe.log", audio=True)
+    api_key = screenpipe.new_api_key()
+    proc = screenpipe.start_recorder(cfg, data_dir, cfg["screenpipe_port"], session_dir / "screenpipe.log", audio=True, api_key=api_key)
     stats = screenpipe.wait_for_capture(data_dir, need_audio=True, timeout=90)
     if stats["frames"] == 0:
         screenpipe.stop_recorder(proc)
@@ -403,13 +405,20 @@ def run_session(cfg: dict, args) -> int:
         session["recording_ended_at"] = iso_utc()
         write_json(session_dir / "session.json", session)
         stop_backup_audio(backup)
+        say("Collecting the records from the recorder (this can take a minute) ...")
+        try:
+            ex = export_session(cfg["screenpipe_port"], api_key, session_dir, parse_timestamp(session["recording_started_at"]))
+            session["export"] = {k: ex[k] for k in ("frames", "ui_events", "audio_chunks", "audio_files", "typed_chars")}
+        except (ApiError, OSError, ValueError, KeyError) as exc:
+            session["export_error"] = str(exc)
+            say(f"WARNING: could not read the records back from the recorder: {exc}. The raw folder is kept; tell the study team.")
         say("Stopping the recorder ...")
         screenpipe.stop_recorder(proc)
-        screenpipe.wal_checkpoint(data_dir / "db.sqlite")
+        write_json(session_dir / "session.json", session)
     pause("Recording stopped. Press Enter for the questions")
     session["retrospective"] = retrospective()
     write_json(session_dir / "session.json", session)
-    session["redactions"] = review_and_redact(data_dir, session)
+    session["redactions"] = review_and_redact(session_dir, session)
     write_json(session_dir / "session.json", session)
     if ask_yes("Pack the session into a zip for upload now?", default=True):
         package_and_upload(cfg, session_dir)
@@ -432,7 +441,6 @@ def find_session(cfg: dict, name_or_path: str) -> Path:
 
 def cmd_package(cfg: dict, args) -> int:
     session_dir = find_session(cfg, args.session)
-    screenpipe.wal_checkpoint(session_dir / "screenpipe" / "db.sqlite")
     package_and_upload(cfg, session_dir)
     return 0
 
@@ -441,21 +449,22 @@ def cmd_status(cfg: dict, args) -> int:
     session_dir = find_session(cfg, args.session)
     sess = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
     say(f"{session_dir.name}: participant {sess.get('participant')}, family {sess.get('family')}, outcome {sess.get('outcome')}")
-    print_stats(screenpipe.capture_stats(session_dir / "screenpipe"))
+    print_stats(stats_from_export(session_dir) or screenpipe.capture_stats(session_dir / "screenpipe"))
+    if sess.get("export_error"):
+        say(f"  export error: {sess['export_error']}")
     return 0
 
 
 def cmd_redact(cfg: dict, args) -> int:
     session_dir = find_session(cfg, args.session)
-    data_dir = session_dir / "screenpipe"
     sess_path = session_dir / "session.json"
     sess = json.loads(sess_path.read_text(encoding="utf-8")) if sess_path.exists() else {}
     if args.app:
-        removed = redact_app(data_dir, args.app)
+        removed = redact_app(session_dir, args.app)
         sess.setdefault("redactions", []).append({"kind": "app", "match": args.app, "removed": removed, "at": iso_utc()})
     elif args.from_min is not None and args.to_min is not None:
         start = datetime.fromisoformat(sess["recording_started_at"]).timestamp()
-        removed = redact_range(data_dir, start + args.from_min * 60, start + args.to_min * 60)
+        removed = redact_range(session_dir, start + args.from_min * 60, start + args.to_min * 60)
         sess.setdefault("redactions", []).append({"kind": "range", "from_min": args.from_min, "to_min": args.to_min, "removed": removed, "at": iso_utc()})
     else:
         say("give --app TEXT or --from-min N --to-min M")
