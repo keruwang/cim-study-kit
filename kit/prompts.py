@@ -56,19 +56,23 @@ THINKING ALOUD
   unsure about, when you change your mind, when you give up on something,
   when you come back to something. Short fragments are fine.
   Do not explain or justify yourself for us; just keep talking.
-  If you go quiet for a while, that is OK; resume when you notice.
 
-CHECKPOINTS
-  Every {every} minutes you will hear a chime and a short spoken prompt.
-  When you hear it, say ONE sentence:
-     "Right now I am trying to ... and I am [sure / fairly sure / not sure]."
-  Then carry on. Do not stop working.
+WHAT THE KIT DOES MEANWHILE
+  Nothing, as long as you keep talking. The window shrinks to a small
+  timer in the corner of the screen. If you go quiet for about
+  {silence} minutes, a chime and a short voice line remind you to think
+  aloud; nothing else interrupts you.{checkpoints}
 
 ENDING
   At {minutes} minutes you hear "time is up". Finish your thought and
   come back to the study window. A few typed questions follow (about
   5 minutes), then the review and the upload.
 """
+
+CHECKPOINTS_OPTIONAL = """
+  Every {every} minutes you will also hear a chime and a spoken prompt:
+  say ONE sentence about what you are trying to do and how sure you are,
+  then carry on."""
 
 TASK_INTRO = """
 YOUR TASK
@@ -91,9 +95,10 @@ SMALL SIDE TASKS (optional)
 """
 
 CHECKPOINT_SPOKEN = "Checkpoint. In one sentence, say what you are trying to do right now, and how sure you are."
+SILENCE_SPOKEN = "You have been quiet for a while. Please keep saying what you are thinking."
 CHECKPOINT_TITLE = "Checkpoint {n}"
 NUDGE_SPOKEN = "Reminder: if you listed a small side task, you may handle it whenever it suits you. Or ignore this."
-START_SPOKEN = "Recording has started. Please begin, and remember to think aloud."
+START_SPOKEN = "Recording has started. Please begin, and keep thinking aloud."
 WRAP_UP_SPOKEN = "Two minutes left. Start wrapping up your thought."
 END_SPOKEN = "Time is up. Please finish your sentence, then come back to the study window."
 

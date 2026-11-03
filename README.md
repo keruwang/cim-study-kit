@@ -23,17 +23,19 @@ python3 study.py setup
 
 If the screenpipe desktop app is installed, quit it first.
 
+The silence reminder needs `ffmpeg` to hear the microphone (macOS: `brew install ffmpeg`). Without it the kit reminds you at a fixed interval instead; `setup` tells you which.
+
 ## 2. The session (about 60 minutes)
 
 ```bash
 python3 study.py run
 ```
 
-A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, the think-aloud instructions, then the recording with a countdown. Every 10 minutes the window flashes a banner, a chime plays, and a voice asks you to say one sentence about what you are trying to do. When the time is up, the window asks a few questions, shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
+A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, and the think-aloud instructions. When you press Start it shrinks to a small timer in the bottom-right corner of the screen and stays out of the way. Just work and keep saying what you are thinking. If you go quiet for about five minutes, a chime and a short voice line remind you to think aloud; nothing else interrupts you until "two minutes left" and "time is up". Then the window comes back, asks a few questions, shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
 
-Keep the window visible (shrink it or move it to a corner). Use the **Test chime and voice** button on the first page to check that you can hear the cues.
+Press **End** on the timer to stop early. Use the **Test chime and voice** button on the first page to check that you can hear the cues. The small "mic" label on the timer turns green while the kit hears you; if it never does, tell us.
 
-Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` turns off the halfway side-task reminder; `--minutes 30` shortens the session; `--checkpoint-every 5` changes the chime interval; `--demo` lets you click through the whole flow in about two minutes with nothing recorded; `--cli` uses a terminal-only flow instead of the window.
+Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` turns off the halfway side-task reminder; `--minutes 30` shortens the session; `--checkpoint-every 10` adds fixed spoken checkpoints every 10 minutes (off by default); `--demo` lets you click through the whole flow in about two minutes with nothing recorded; `--cli` uses a terminal-only flow instead of the window.
 
 ## 3. If something goes wrong
 
@@ -45,7 +47,7 @@ Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` 
 
 ## For researchers
 
-- `study_config.json`: upload link, session length, checkpoint interval, deny list, pinned screenpipe version.
+- `study_config.json`: upload link, session length, silence reminder (minutes without voice; `voice_rms_db` threshold; fixed-interval fallback without ffmpeg), optional checkpoints, deny list, pinned screenpipe version.
 - `tasks/tasks.json`: the task families (A clear/routine, B choose among options, C plan something open, D explore an idea, E make something from sources) with their difficulty axes.
 - `researcher/transcribe.py <session>`: transcribe the audio locally (whisper); `researcher/export_history.py <session>`: produce the model-readable histories (events only; events + views), the think-aloud transcript kept separate, and the checkpoint times. Details in [docs/RESEARCHER.md](docs/RESEARCHER.md).
 - Tests: `python3 -m unittest discover tests`.
@@ -55,13 +57,13 @@ Session bundle layout:
 ```
 sessions/P07_20261103-1402/
   session.json          participant, family, axes, task text, timing, screenpipe args, retrospective answers, redactions
-  checkpoints.jsonl     when each chime fired (checkpoint / nudge / wrap / end)
+  checkpoints.jsonl     when each cue fired (silence reminder with seconds of silence / nudge / wrap / end / optional checkpoint)
   export/               ui_events.jsonl (every input event), frames.jsonl (every screenshot: app, window, url,
                         trigger, screen text, snapshot path), audio_chunks.jsonl, summary.json; read back from the
                         recorder's local API at the end of the session (screenpipe 0.4.5x archives text into parquet
                         files that only the running daemon can read)
   screenpipe/data/      the screenshots (<date>/*.jpg) and the 30-s audio files the export points to
-  backup_audio.wav      whole-session microphone recording (if ffmpeg was available)
+  backup_audio.wav      whole-session microphone recording from the ffmpeg monitor (if ffmpeg was available); session.json "mic" has voiced seconds
   screenpipe.log
   manifest.json         zip name, size, sha256
   (screenpipe/storage/, the recorder's own index and parquet payloads, stays on the participant's machine)

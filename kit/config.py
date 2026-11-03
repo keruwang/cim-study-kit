@@ -14,7 +14,15 @@ DEFAULTS = {
     "upload_url": "",
     # Timing (minutes).
     "session_minutes": 50,
-    "checkpoint_every_minutes": 10,
+    # Fixed spoken checkpoints every N minutes; 0 = off (decided 2026-11-02: participants just talk).
+    "checkpoint_every_minutes": 0,
+    # Remind the participant to think aloud after this many minutes without voice on the microphone
+    # (needs ffmpeg for level metering); 0 = never.
+    "silence_reminder_minutes": 5,
+    # Without a microphone monitor, remind at this fixed interval instead; 0 = never.
+    "silence_fallback_reminder_minutes": 10,
+    # RMS level (dBFS, one-second windows) above which we count the second as voice. Quiet room ~ -60, speech ~ -25..-35.
+    "voice_rms_db": -40,
     "nudge_at_minute": 25,
     "wrap_up_minutes": 2,
     # screenpipe.
@@ -30,7 +38,7 @@ DEFAULTS = {
     "ignored_windows": ["1Password", "Bitwarden", "Keychain Access", "LastPass", "Dashlane", "KeePass", "Passwords"],
     # Browser domains never recorded. Append ":subdomains" to include descendants.
     "url_block": [],
-    # If ffmpeg is on PATH, also record the microphone to a plain WAV as a backup channel.
+    # If ffmpeg is available, the microphone monitor also records a plain WAV as a backup channel.
     "backup_audio": True,
     "sessions_dir": "sessions",
 }

@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -16,6 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "researcher"))
 
 from kit import export, prompts, screenpipe  # noqa: E402
+from kit.audio_monitor import MicMonitor, find_ffmpeg  # noqa: E402
+from kit.session import silence_due  # noqa: E402
 from kit.config import DEFAULTS, load_config  # noqa: E402
 from kit.package import make_zip  # noqa: E402
 from kit.redact import redact_app, redact_range  # noqa: E402
@@ -116,6 +119,7 @@ class FakeDaemon(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -211,10 +215,49 @@ class UnitTests(unittest.TestCase):
         for f in tasks["families"]:
             self.assertEqual(set(f["axes"]), {"fuzziness", "predictability", "expertise"})
             self.assertTrue(f["examples"])
-        self.assertIn("{every}", prompts.THINK_ALOUD)
+        self.assertIn("{silence}", prompts.THINK_ALOUD)
+        self.assertIn("{every}", prompts.CHECKPOINTS_OPTIONAL)
+        self.assertEqual(DEFAULTS["checkpoint_every_minutes"], 0)
         self.assertNotIn("terminal", prompts.END_SPOKEN.lower())
         for item in prompts.RETROSPECTIVE:
             self.assertIn(item["kind"], ("text", "int1to5", "list"))
+
+    def test_silence_due_logic(self):
+        class Mon:
+            def __init__(self, since): self.since = since
+            def alive(self): return True
+            def seconds_since_voice(self): return self.since
+        cfg = {"silence_reminder_minutes": 5, "silence_fallback_reminder_minutes": 10}
+        self.assertIsNone(silence_due(cfg, Mon(100), 100, None))
+        self.assertEqual(silence_due(cfg, Mon(301), 400, None), 301)
+        self.assertIsNone(silence_due(cfg, Mon(301), 400, 200))      # reminded 200 s ago: wait
+        self.assertEqual(silence_due(cfg, Mon(700), 800, 400), 700)  # still quiet 5 min after the last reminder
+        self.assertIsNone(silence_due(cfg, Mon(None), 800, None))    # no reading yet
+        self.assertIsNone(silence_due(cfg, None, 599, None))         # fallback: fixed interval without a mic
+        self.assertEqual(silence_due(cfg, None, 601, None), 601)
+        self.assertIsNone(silence_due(cfg, None, 900, 601))
+        self.assertIsNone(silence_due({"silence_reminder_minutes": 0, "silence_fallback_reminder_minutes": 0}, None, 5000, None))
+
+    def test_mic_monitor_on_synthetic_audio(self):
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            self.skipTest("ffmpeg not installed")
+        with tempfile.TemporaryDirectory() as d:
+            mon = MicMonitor(ffmpeg, Path(d), voice_db=-40, backup_wav=True,
+                             input_args=["-f", "lavfi", "-i", "sine=frequency=440:duration=2"])
+            self.assertTrue(mon.start())
+            mon.proc.wait(timeout=20)
+            time.sleep(0.3)
+            self.assertGreaterEqual(mon.voiced_seconds, 1)
+            self.assertIsNotNone(mon.last_voice_ts)
+            self.assertTrue(mon.wav_path.exists() and mon.wav_path.stat().st_size > 1000)
+            quiet = MicMonitor(ffmpeg, Path(d), voice_db=-40, backup_wav=False, input_args=["-f", "lavfi", "-i", "anullsrc=duration=2"])
+            self.assertTrue(quiet.start())
+            quiet.proc.wait(timeout=20)
+            time.sleep(0.3)
+            self.assertEqual(quiet.voiced_seconds, 0)
+            self.assertGreaterEqual(quiet.lines, 1)
+            self.assertIsNotNone(quiet.seconds_since_voice())
 
     def test_api_key_env(self):
         self.assertTrue(screenpipe.new_api_key().startswith("kit-"))

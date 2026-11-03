@@ -18,13 +18,38 @@ from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
 from .export import ApiError, export_session, stats_from_export
 from .redact import redact_app, redact_range
-from .session import append_jsonl, checkpoint_minutes, start_backup_audio, stop_backup_audio, write_json
+from .session import append_jsonl, checkpoint_minutes, silence_due, start_backup_audio, stop_backup_audio, write_json
 from .timeutil import iso_utc
 
 SYSTEM = platform.system()
 PAD = {"padx": 12, "pady": 6}
 BANNER_BG = "#ffe66d"
 REC_BG = "#ffd6d6"
+PILL_W, PILL_H = 230, 44
+MIN_SIZE = (460, 420)
+
+
+class _DemoMic:
+    """Demo mode: a microphone that never hears anything, so the silence reminder can be seen."""
+
+    def __init__(self):
+        self.t0 = time.time()
+        self.lines = 1
+
+    def alive(self):
+        return True
+
+    def heard_recently(self, within=3.0):
+        return False
+
+    def seconds_since_voice(self):
+        return time.time() - self.t0
+
+    def stop(self):
+        pass
+
+    def summary(self):
+        return {"demo": True}
 
 
 class StudyApp:
@@ -51,7 +76,7 @@ class StudyApp:
         self.root = tk.Tk()
         self.root.title(cfg["study_name"])
         self.root.geometry("520x600+40+60")
-        self.root.minsize(460, 420)
+        self.root.minsize(*MIN_SIZE)
         self.root.attributes("-topmost", True)
         self.default_bg = self.root.cget("bg")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -179,15 +204,16 @@ class StudyApp:
 
     def schedule(self) -> tuple[int, int, list[int]]:
         minutes = self.args.minutes or self.cfg["session_minutes"]
-        every = getattr(self.args, "checkpoint_every", None) or self.cfg["checkpoint_every_minutes"]
-        return minutes, every, checkpoint_minutes(minutes, every)
+        every = getattr(self.args, "checkpoint_every", None) or self.cfg["checkpoint_every_minutes"] or 0
+        return minutes, every, (checkpoint_minutes(minutes, every) if every else [])
 
     def show_instructions(self) -> None:
         self.clear()
         self.heading("Thinking aloud")
         minutes, every, cps = self.schedule()
-        text = prompts.THINK_ALOUD.format(every=every, minutes=minutes)
-        text += f"\nThis session: {minutes} minutes. Checkpoints at minute {', '.join(map(str, cps)) or '(none)'}."
+        text = prompts.THINK_ALOUD.format(silence=self.cfg['silence_reminder_minutes'], minutes=minutes,
+                                          checkpoints=prompts.CHECKPOINTS_OPTIONAL.format(every=every) if every else '')
+        text += f"\nThis session: {minutes} minutes." + (f" Checkpoints at minute {', '.join(map(str, cps))}." if cps else "")
         if self.session.get("nudge_enabled"):
             text += f" Side-task reminder at minute {self.cfg['nudge_at_minute']}."
         text += "\n\nThis window stays on top. You can shrink it or move it to a corner, but keep it visible.\nOpen the apps you need, then press Start."
@@ -205,6 +231,7 @@ class StudyApp:
         self.session.update({
             "study": self.cfg["study_name"], "kit_version": "0.1.0", "ui": "gui", "demo": self.demo,
             "session_minutes": minutes, "checkpoint_every_minutes": every, "checkpoints_planned": cps,
+            "silence_reminder_minutes": self.cfg["silence_reminder_minutes"],
             "nudge_at_minute": self.cfg["nudge_at_minute"] if self.session.get("nudge_enabled") else None,
             "os": f"{SYSTEM} {platform.release()}", "machine": platform.machine(), "python": platform.python_version(),
             "screenpipe_version": self.cfg["screenpipe_version"],
@@ -254,43 +281,72 @@ class StudyApp:
         warn = ""
         if not self.demo and payload["audio_files"] == 0 and payload["audio_chunks"] == 0:
             warn = "No audio yet; if this persists the think-aloud will be missing."
-        if not self.demo and self.cfg.get("backup_audio", True):
-            self.backup = start_backup_audio(self.session_dir)
-            self.session["backup_audio"] = self.backup is not None
+        if not self.demo:
+            self.backup = start_backup_audio(self.session_dir, self.cfg)
+            self.session["mic_monitor"] = self.backup is not None
+            if self.backup is None:
+                warn = (warn + " " if warn else "") + "No ffmpeg: the kit cannot hear you, so it reminds at a fixed interval instead."
+        else:
+            self.backup = _DemoMic()
+        self.last_reminder = None
         self.start_ts = time.time()
         self.rec_start = self.start_ts
         self.session["recording_started_at"] = iso_utc(self.start_ts)
         write_json(self.session_dir / "session.json", self.session)
         self.show_recording(warn)
         notify.cue("Recording started", prompts.START_SPOKEN)
-        self.banner(prompts.START_SPOKEN, flash=False)
+        self.banner(prompts.START_SPOKEN, flash=False, seconds=6)
 
     def show_recording(self, warn: str = "") -> None:
+        """Shrink to a small timer in the bottom-right corner; the full window comes back when the recording ends."""
         self.clear()
         self.root.configure(bg=REC_BG)
+        self.root.title("recording")
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        self.pill_geometry = f"{PILL_W}x{PILL_H}+{sw - PILL_W - 24}+{sh - PILL_H - 90}"
         top = tk.Frame(self.container, bg=REC_BG)
         top.pack(fill="x")
-        tk.Label(top, text="● RECORDING", fg="#b00020", bg=REC_BG, font=("TkDefaultFont", 13, "bold")).pack(side="left", padx=12, pady=6)
+        tk.Label(top, text="●", fg="#b00020", bg=REC_BG, font=("TkDefaultFont", 14, "bold")).pack(side="left", padx=(8, 0))
+        self.mic_lbl = tk.Label(top, text="mic", fg="#999", bg=REC_BG, font=("TkDefaultFont", 10))
+        self.mic_lbl.pack(side="left", padx=(4, 0))
         self.clock_var = tk.StringVar(value="00:00")
-        tk.Label(top, textvariable=self.clock_var, bg=REC_BG, font=("TkFixedFont", 30, "bold")).pack(side="right", padx=12)
-        self.next_var = tk.StringVar(value="")
-        ttk.Label(self.container, textvariable=self.next_var, wraplength=480).pack(anchor="w", padx=12)
-        self.banner_var = tk.StringVar(value="Keep thinking aloud.")
-        self.banner_lbl = tk.Label(self.container, textvariable=self.banner_var, wraplength=470, justify="left",
-                                   font=("TkDefaultFont", 14, "bold"), bg=BANNER_BG, padx=10, pady=12)
-        self.banner_lbl.pack(fill="x", padx=12, pady=8)
-        self.stats_var = tk.StringVar(value=warn)
-        ttk.Label(self.container, textvariable=self.stats_var, wraplength=480, foreground="#555").pack(anchor="w", padx=12)
-        tk.Label(self.container, text="When you hear the chime, say one sentence:\n\"Right now I am trying to ..., and I am [sure / fairly sure / not sure].\"",
-                 justify="left", wraplength=470).pack(anchor="w", padx=12, pady=6)
-        self.button_row(("End session now", self.confirm_end))
+        tk.Label(top, textvariable=self.clock_var, bg=REC_BG, font=("TkFixedFont", 18, "bold")).pack(side="left", padx=8)
+        tk.Button(top, text="End", command=self.confirm_end, font=("TkDefaultFont", 10), highlightthickness=0, bd=0).pack(side="right", padx=6)
+        self.banner_var = tk.StringVar(value="")
+        self.banner_lbl = tk.Label(self.container, textvariable=self.banner_var, wraplength=PILL_W - 20, justify="left",
+                                   font=("TkDefaultFont", 11, "bold"), bg=BANNER_BG, padx=8, pady=4)
+        self.stats_var = tk.StringVar(value="")
+        self.root.update_idletasks()  # let the old page's size request go before shrinking
+        self.root.minsize(PILL_W, PILL_H)
+        self.root.geometry(self.pill_geometry)
+        if warn:
+            self.banner(warn, flash=False, seconds=20)
         self.tick()
-        self.poll_stats()
 
-    def banner(self, text: str, flash: bool = True) -> None:
+    def _expand_pill(self, expanded: bool) -> None:
+        if not hasattr(self, "pill_geometry"):
+            return
+        try:
+            if expanded:
+                self.banner_lbl.pack(fill="x", padx=6, pady=(0, 6))
+                w, rest = self.pill_geometry.split("x", 1)
+                h, pos = rest.split("+", 1)
+                self.root.geometry(f"{w}x{PILL_H + 70}+{pos}")
+            else:
+                self.banner_lbl.pack_forget()
+                self.root.geometry(self.pill_geometry)
+        except tk.TclError:
+            pass
+
+    def banner(self, text: str, flash: bool = True, seconds: int = 15) -> None:
+        """Show a short message under the timer for a few seconds (the pill grows, then shrinks back)."""
         self.banner_var.set(text)
+        self._expand_pill(True)
+        self._banner_gen = getattr(self, "_banner_gen", 0) + 1
+        gen = self._banner_gen
         if flash:
             self._flash(6)
+        self.later(seconds * 1000, lambda: gen == self._banner_gen and self._expand_pill(False))
 
     def _flash(self, n: int) -> None:
         if n <= 0 or not self.banner_lbl.winfo_exists():
@@ -305,12 +361,18 @@ class StudyApp:
     def fire(self, kind: str, minute: int, n: int | None = None) -> None:
         elapsed = time.time() - self.start_ts
         entry = {"kind": kind, "minute": minute, "at": iso_utc(), "elapsed_s": round(elapsed)}
+        if kind == "silence":
+            entry = None
         if n is not None:
             entry["n"] = n
-        append_jsonl(self.session_dir / "checkpoints.jsonl", entry)
+        if entry:
+            append_jsonl(self.session_dir / "checkpoints.jsonl", entry)
         if kind == "checkpoint":
             notify.cue(prompts.CHECKPOINT_TITLE.format(n=n), prompts.CHECKPOINT_SPOKEN)
             self.banner(f"CHECKPOINT {n}: in one sentence, what are you trying to do right now, and how sure are you?")
+        elif kind == "silence":
+            notify.cue("Keep thinking aloud", prompts.SILENCE_SPOKEN)
+            self.banner("Quiet for a while: please keep thinking aloud.")
         elif kind == "nudge":
             notify.cue("Side-task reminder", prompts.NUDGE_SPOKEN)
             self.banner("Reminder: you may handle a side task now if it suits you, or ignore this.")
@@ -328,12 +390,19 @@ class StudyApp:
         m = elapsed / self.minute_s
         remaining = max(0, minutes * self.minute_s - elapsed)
         self.clock_var.set(f"{int(remaining // 60):02d}:{int(remaining % 60):02d}")
-        upcoming = [c for c in cps if c > m]
+        mon = self.backup
+        try:
+            heard = mon is not None and mon.heard_recently(3.0)
+            self.mic_lbl.configure(fg="#1e8e3e" if heard else "#999", text="mic" if (mon is not None and mon.alive()) else "no mic")
+        except tk.TclError:
+            pass
+        quiet = silence_due(self.cfg, mon, elapsed, self.last_reminder, self.minute_s)
+        if quiet is not None:
+            self.last_reminder = elapsed
+            append_jsonl(self.session_dir / "checkpoints.jsonl", {"kind": "silence", "minute": round(m, 1), "silent_s": round(quiet),
+                                                                   "at": iso_utc(), "elapsed_s": round(elapsed)})
+            self.fire("silence", round(m, 1))
         nudge = self.session.get("nudge_at_minute")
-        parts = [f"next checkpoint at minute {upcoming[0]}" if upcoming else "no more checkpoints"]
-        if nudge and m < nudge:
-            parts.append(f"side-task reminder at minute {nudge}")
-        self.next_var.set(f"Minute {int(m)} of {minutes}; " + "; ".join(parts) + ".")
         for i, c in enumerate(cps, start=1):
             if m >= c and ("cp", c) not in self.fired:
                 self.fired.add(("cp", c))
@@ -374,12 +443,17 @@ class StudyApp:
         write_json(self.session_dir / "session.json", self.session)
         self.clear()
         self.root.configure(bg=self.default_bg)
+        self.root.title(self.cfg["study_name"])
+        self.root.minsize(*MIN_SIZE)
+        self.root.geometry("520x600+40+60")
         self.heading("Saving the recording")
         ttk.Label(self.container, text="Collecting the records from the recorder, then stopping it. This can take a minute ...",
                   wraplength=480).pack(anchor="w", **PAD)
 
         def stop():
             stop_backup_audio(self.backup)
+            if self.backup is not None and hasattr(self.backup, "summary"):
+                self.session["mic"] = self.backup.summary()
             if self.proc is not None:
                 try:
                     stats = export_session(self.cfg["screenpipe_port"], self.api_key, self.session_dir, self.rec_start)

@@ -50,7 +50,10 @@ def _request(port: int, key: str | None, path: str, params: dict | None = None, 
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read()[:300].decode("utf-8", errors="replace")
+        try:
+            detail = exc.read()[:300].decode("utf-8", errors="replace")
+        except OSError:
+            detail = ""
         raise ApiError(f"{path} -> HTTP {exc.code}: {detail}") from None
     except (urllib.error.URLError, OSError) as exc:
         raise ApiError(f"{path} -> {exc}") from None

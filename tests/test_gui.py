@@ -24,6 +24,19 @@ def pump(app, seconds: float) -> None:
 
 
 class GuiDemoFlow(unittest.TestCase):
+    def test_default_schedule_has_no_checkpoints(self):
+        try:
+            import tkinter
+            tkinter.Tk().destroy()
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"no display: {exc}")
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dict(DEFAULTS, sessions_dir=d)
+            args = types.SimpleNamespace(participant="T1", family="A", minutes=None, no_nudge=True, checkpoint_every=None, skip_checks=True)
+            app = gui.StudyApp(cfg, args, demo=True)
+            self.assertEqual(app.schedule(), (50, 0, []))
+            app.root.destroy()
+
     def test_full_flow(self):
         try:
             import tkinter
@@ -32,7 +45,7 @@ class GuiDemoFlow(unittest.TestCase):
             self.skipTest(f"no display: {exc}")
         notify.cue = lambda *a, **k: None  # silence
         with tempfile.TemporaryDirectory() as d:
-            cfg = dict(DEFAULTS, sessions_dir=d, wrap_up_minutes=1, nudge_at_minute=1, upload_url="")
+            cfg = dict(DEFAULTS, sessions_dir=d, wrap_up_minutes=1, nudge_at_minute=1, upload_url="", silence_reminder_minutes=1)
             args = types.SimpleNamespace(participant="T1", family="C", minutes=3, no_nudge=False, checkpoint_every=1, skip_checks=True)
             gui.reveal = lambda p: None
             gui.open_url = lambda u: None
@@ -46,15 +59,19 @@ class GuiDemoFlow(unittest.TestCase):
             self.assertTrue(app.session["nudge_enabled"])
             app.show_instructions()
             app.start_recording()
-            pump(app, 2.0)  # recorder thread (demo) -> started -> recording page
+            pump(app, 2.0)  # recorder thread (demo) -> started -> recording pill
             self.assertIsNotNone(app.start_ts)
-            pump(app, 4.5)  # 3 "minutes" elapse: checkpoints at 1, 2; nudge at 1; wrap at 2; end at 3
+            self.assertTrue(app.root.geometry().startswith(f"{gui.PILL_W}x"))  # shrunk to the corner pill
+            pump(app, 4.5)  # 3 "minutes" elapse: checkpoints at 1, 2; nudge at 1; wrap at 2; silence reminder (demo mic hears nothing); end at 3
             self.assertIsNone(app.start_ts)
             pump(app, 1.5)  # stop thread -> retrospective
             lines = [json.loads(l) for l in (app.session_dir / "checkpoints.jsonl").read_text().splitlines()]
             kinds = [l["kind"] for l in lines]
             self.assertEqual(kinds.count("checkpoint"), 2)
+            self.assertGreaterEqual(kinds.count("silence"), 1)
+            self.assertLessEqual(kinds.count("silence"), 3)  # at most once per silence interval (1 "minute" here)
             self.assertIn("nudge", kinds)
+            self.assertTrue(app.root.geometry().startswith("520x"))  # full window is back for the questions
             self.assertIn("wrap", kinds)
             self.assertEqual(kinds[-1], "end")
             # retrospective: answer every question

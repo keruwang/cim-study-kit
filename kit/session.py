@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import notify, prompts, screenpipe
+from .audio_monitor import MicMonitor, find_ffmpeg
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
 from .export import ApiError, export_session, stats_from_export
@@ -101,7 +102,8 @@ def run_setup(cfg: dict, args) -> int:
         return 1
     say(f"  screenpipe command: {' '.join(cmd)} (first run downloads about 100 MB)")
     say(f"  screenpipe version: {screenpipe.version_string(cfg)}")
-    say(f"  ffmpeg (backup audio): {'found' if shutil.which('ffmpeg') else 'not found, screenpipe audio only'}")
+    ffmpeg = find_ffmpeg(cfg["screenpipe_port"])
+    say(f"  ffmpeg (microphone monitor + backup audio): {ffmpeg or 'NOT FOUND: the silence reminder will fall back to a fixed interval. macOS: brew install ffmpeg'}")
     if screenpipe.port_in_use(cfg["screenpipe_port"]):
         say(f"  port {cfg['screenpipe_port']}: IN USE. Another screenpipe is running? Quit it, or change screenpipe_port in study_config.json.")
         return 1
@@ -130,13 +132,19 @@ def run_setup(cfg: dict, args) -> int:
     tmp.mkdir(parents=True)
     log_path = tmp / "screenpipe.log"
     proc = screenpipe.start_recorder(cfg, tmp / "screenpipe", cfg["screenpipe_port"], log_path, audio=True)
+    mon = start_backup_audio(tmp, cfg)
     try:
         stats = screenpipe.wait_for_capture(tmp / "screenpipe", need_audio=True, timeout=75)
         time.sleep(10)
         stats = screenpipe.capture_stats(tmp / "screenpipe")
     finally:
         screenpipe.stop_recorder(proc)
+        stop_backup_audio(mon)
     say("")
+    if mon is not None:
+        say(f"  microphone monitor: heard voice during {mon.voiced_seconds} of {mon.lines} seconds (threshold {mon.voice_db} dB; last level {mon.level_db})")
+        if mon.lines and mon.voiced_seconds == 0:
+            say("  WARNING: no voice detected while you talked. Lower voice_rms_db in study_config.json (e.g. -50) or check the input device.")
     say(f"  frames (screenshots + text): {stats['frames']}")
     say(f"  input events: {stats['ui_events'] or 'none'}")
     say(f"  audio files: {stats['audio_files']}  (db rows: {stats['audio_chunks']})")
@@ -182,39 +190,42 @@ def show_task(fam: dict, tasks: dict) -> None:
                                   guidance=fam["guidance"], examples=examples, avoid=avoid))
 
 
-def start_backup_audio(session_dir: Path) -> subprocess.Popen | None:
-    ffmpeg = shutil.which("ffmpeg")
+def start_backup_audio(session_dir: Path, cfg: dict) -> MicMonitor | None:
+    """Start the microphone monitor (level metering for the silence reminder; backup WAV if configured)."""
+    ffmpeg = find_ffmpeg(cfg.get("screenpipe_port"))
     if not ffmpeg:
         return None
-    out = session_dir / "backup_audio.wav"
-    if SYSTEM == "Darwin":
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", ":default", "-ac", "1", "-ar", "16000", str(out)]
-    elif SYSTEM == "Linux":
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "pulse", "-i", "default", "-ac", "1", "-ar", "16000", str(out)]
-    else:
-        return None  # Windows dshow needs the device name; screenpipe audio is the channel there.
-    try:
-        return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=open(session_dir / "backup_audio.log", "ab"))
-    except Exception:
+    mon = MicMonitor(ffmpeg, session_dir, voice_db=float(cfg.get("voice_rms_db", -40)), backup_wav=bool(cfg.get("backup_audio", True)))
+    return mon if mon.start() else None
+
+
+def stop_backup_audio(mon: MicMonitor | None) -> None:
+    if mon:
+        mon.stop()
+
+
+def silence_due(cfg: dict, mon: MicMonitor | None, elapsed: float, last_reminder: float | None, minute_s: float = 60.0) -> float | None:
+    """Return the seconds of silence to report if a reminder is due now, else None."""
+    if mon is not None and mon.alive():
+        limit = float(cfg.get("silence_reminder_minutes", 0) or 0) * minute_s
+        since = mon.seconds_since_voice()
+        if limit <= 0 or since is None:
+            return None
+        since_reminder = elapsed - last_reminder if last_reminder is not None else since
+        return since if since >= limit and since_reminder >= limit else None
+    limit = float(cfg.get("silence_fallback_reminder_minutes", 0) or 0) * minute_s
+    if limit <= 0:
         return None
+    anchor = last_reminder if last_reminder is not None else 0.0
+    return elapsed - anchor if elapsed - anchor >= limit else None
 
 
-def stop_backup_audio(proc: subprocess.Popen | None) -> None:
-    if not proc or proc.poll() is not None:
-        return
-    try:
-        proc.stdin.write(b"q")  # type: ignore[union-attr]
-        proc.stdin.flush()  # type: ignore[union-attr]
-        proc.wait(timeout=10)
-    except Exception:
-        proc.terminate()
-
-
-def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool) -> str:
+def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool, mon: MicMonitor | None = None) -> str:
     """Run the timer with cues. Returns 'completed' or 'stopped_early'."""
     minutes = session["session_minutes"]
-    every = getattr(session, "get", lambda k, d=None: d)("checkpoint_every_minutes") or cfg["checkpoint_every_minutes"]
-    checkpoints = checkpoint_minutes(minutes, every)
+    every = session.get("checkpoint_every_minutes") or 0
+    checkpoints = checkpoint_minutes(minutes, every) if every else []
+    last_reminder = None
     nudge_min = cfg["nudge_at_minute"] if nudge else None
     wrap = max(0, minutes - cfg["wrap_up_minutes"])
     start = time.time()
@@ -239,6 +250,12 @@ def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool) ->
                     append_jsonl(cp_path, {"kind": "checkpoint", "n": n, "minute": cp, "at": iso_utc(), "elapsed_s": round(elapsed)})
                     notify.cue(prompts.CHECKPOINT_TITLE.format(n=n), prompts.CHECKPOINT_SPOKEN)
                     say(f"  >> checkpoint {n}: say one sentence about what you are trying to do")
+            quiet = silence_due(cfg, mon, elapsed, last_reminder)
+            if quiet is not None:
+                last_reminder = elapsed
+                append_jsonl(cp_path, {"kind": "silence", "minute": round(elapsed / 60, 1), "silent_s": round(quiet), "at": iso_utc(), "elapsed_s": round(elapsed)})
+                notify.cue("Keep thinking aloud", prompts.SILENCE_SPOKEN)
+                say(f"  >> quiet for {int(quiet // 60)} min: reminder played")
             if nudge_min is not None and m >= nudge_min and ("nudge", 0) not in fired:
                 fired.add(("nudge", 0))
                 append_jsonl(cp_path, {"kind": "nudge", "minute": nudge_min, "at": iso_utc(), "elapsed_s": round(elapsed)})
@@ -366,7 +383,9 @@ def run_session(cfg: dict, args) -> int:
         if not side_tasks:
             nudge = False
     minutes = args.minutes or cfg["session_minutes"]
-    say(prompts.THINK_ALOUD.format(every=cfg["checkpoint_every_minutes"], minutes=minutes))
+    every = getattr(args, "checkpoint_every", None) or cfg["checkpoint_every_minutes"] or 0
+    say(prompts.THINK_ALOUD.format(silence=cfg["silence_reminder_minutes"], minutes=minutes,
+                                   checkpoints=prompts.CHECKPOINTS_OPTIONAL.format(every=every) if every else ""))
     pause("Open the apps you need. When ready, press Enter to start recording")
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
@@ -377,7 +396,8 @@ def run_session(cfg: dict, args) -> int:
         "participant": pid, "study": cfg["study_name"], "kit_version": "0.1.0",
         "family": fam["code"], "family_name": fam["name"], "axes": fam["axes"], "task_text": task_text,
         "nudge_enabled": nudge, "side_tasks": side_tasks, "session_minutes": minutes,
-        "checkpoint_every_minutes": getattr(args, "checkpoint_every", None) or cfg["checkpoint_every_minutes"], "nudge_at_minute": cfg["nudge_at_minute"] if nudge else None,
+        "checkpoint_every_minutes": every, "silence_reminder_minutes": cfg["silence_reminder_minutes"],
+        "nudge_at_minute": cfg["nudge_at_minute"] if nudge else None,
         "os": f"{SYSTEM} {platform.release()}", "machine": platform.machine(), "python": platform.python_version(),
         "screenpipe_version": cfg["screenpipe_version"], "screenpipe_args": screenpipe.build_record_args(cfg, data_dir, cfg["screenpipe_port"]),
         "consent": {"agreed": True, "at": iso_utc()}, "created_at": iso_utc(), "local_timezone": time.strftime("%Z"),
@@ -395,16 +415,20 @@ def run_session(cfg: dict, args) -> int:
         return 1
     if stats["audio_files"] == 0 and stats["audio_chunks"] == 0:
         say("WARNING: no audio yet. If this persists the think-aloud will be missing; the backup recorder (if available) still runs.")
-    backup = start_backup_audio(session_dir) if cfg.get("backup_audio", True) else None
-    session["backup_audio"] = backup is not None
+    backup = start_backup_audio(session_dir, cfg)
+    session["mic_monitor"] = backup is not None
+    if backup is None:
+        say("NOTE: ffmpeg not found, so the kit cannot hear whether you are talking; it will remind you at a fixed interval instead.")
     outcome = "aborted"
     try:
-        outcome = timed_recording(cfg, session, session_dir, nudge)
+        outcome = timed_recording(cfg, session, session_dir, nudge, backup)
     finally:
         session["outcome"] = outcome
         session["recording_ended_at"] = iso_utc()
-        write_json(session_dir / "session.json", session)
         stop_backup_audio(backup)
+        if backup is not None:
+            session["mic"] = backup.summary()
+        write_json(session_dir / "session.json", session)
         say("Collecting the records from the recorder (this can take a minute) ...")
         try:
             ex = export_session(cfg["screenpipe_port"], api_key, session_dir, parse_timestamp(session["recording_started_at"]))
