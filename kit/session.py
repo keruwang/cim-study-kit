@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import notify, prompts, screenpipe
+from . import env, notify, prompts, screenpipe
 from .audio_monitor import MicMonitor, VoiceDetector, find_ffmpeg
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
@@ -94,7 +94,12 @@ def checkpoint_minutes(session_minutes: int, every: int) -> list[int]:
 def run_setup(cfg: dict, args) -> int:
     say(prompts.BANNER.format(study_name=cfg["study_name"]))
     say("SETUP CHECK")
-    say(f"  python: {platform.python_version()} on {SYSTEM} {platform.machine()}")
+    say(f"  python: {platform.python_version()} on {SYSTEM} {platform.machine()} ({sys.executable})")
+    tk_ok, tk_detail = env.tk_check()
+    say(f"  window toolkit: {'OK, ' + tk_detail if tk_ok else 'BROKEN: ' + tk_detail}")
+    if not tk_ok:
+        say("  " + env.tk_advice())
+        return 1
     try:
         cmd = screenpipe.base_command(cfg)
     except RuntimeError as exc:

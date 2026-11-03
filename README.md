@@ -6,7 +6,7 @@ What it records: screenshots and on-screen text, your clicks and typed text, app
 
 ## 1. Before the session (5 minutes)
 
-You need **Python 3.9+** and **Node.js 18+** (the recorder, [screenpipe](https://github.com/screenpipe/screenpipe), is fetched through `npx`).
+You need **Python 3.11 or newer from [python.org](https://www.python.org/downloads/)** (on macOS, the Python that comes with the system cannot open the kit's window on macOS 14; Homebrew Python needs `brew install python-tk`), **Node.js 18+** from [nodejs.org](https://nodejs.org) (the recorder, [screenpipe](https://github.com/screenpipe/screenpipe), is fetched through `npx`), and ideally **ffmpeg** (`brew install ffmpeg`) so the kit can hear whether you are talking. `python3 study.py setup` checks all of this.
 
 - macOS: Python is included (if `python3` asks to install developer tools, accept). Node: https://nodejs.org (LTS).
 - Windows: Python from https://python.org (tick "Add to PATH"), Node from https://nodejs.org.

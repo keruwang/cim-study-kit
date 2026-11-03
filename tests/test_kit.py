@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "researcher"))
 
-from kit import export, prompts, screenpipe  # noqa: E402
+from kit import env, export, prompts, screenpipe  # noqa: E402
 from kit.audio_monitor import MicMonitor, VoiceDetector, find_ffmpeg  # noqa: E402
 from kit.session import silence_due  # noqa: E402
 from kit.config import DEFAULTS, load_config  # noqa: E402
@@ -292,6 +292,14 @@ class UnitTests(unittest.TestCase):
             self.assertEqual(quiet.voiced_seconds, 0)
             self.assertGreaterEqual(quiet.lines, 1)
             self.assertIsNotNone(quiet.seconds_since_voice())
+
+    def test_tk_check(self):
+        ok, detail = env.tk_check()
+        if not ok and "required" in detail:
+            self.skipTest("this interpreter's Tk is the broken Apple one; the check reported it: " + detail)
+        self.assertTrue(ok, detail)
+        self.assertTrue(detail.startswith("Tk "))
+        self.assertIn("python.org", env.tk_advice())
 
     def test_api_key_env(self):
         self.assertTrue(screenpipe.new_api_key().startswith("kit-"))

@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from kit import env
 from kit import session as session_mod  # noqa: E402
 from kit.config import load_config  # noqa: E402
 
@@ -53,6 +54,10 @@ def main(argv=None) -> int:
         if args.cmd == "run":
             if args.cli:
                 return session_mod.run_session(cfg, args)
+            ok, detail = env.tk_check()
+            if not ok:
+                print(f"Window toolkit check failed: {detail}\n{env.tk_advice()}\n(Or run with --cli for the terminal-only flow.)")
+                return 1
             from kit.gui import run_gui
             return run_gui(cfg, args, demo=args.demo)
         if args.cmd == "package":
