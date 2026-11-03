@@ -2,7 +2,7 @@
   "_comment": "Edit before distributing. Keys not listed here keep the defaults in kit/config.py.",
   "study_name": "Open-ended computer work study (NYU)",
   "contact": "Keru Wang, kw2727@nyu.edu",
-  "upload_url": "",
+  "upload_url": "https://drive.google.com/drive/folders/1JtojodetH1z0vTiKle5Ya1vvhINjmqX0",
   "session_minutes": 50,
   "checkpoint_every_minutes": 10,
   "nudge_at_minute": 25,
@@ -10,6 +10,14 @@
   "screenpipe_port": 3031,
   "audio_transcription_engine": "disabled",
   "idle_capture_interval_ms": 15000,
-  "ignored_windows": ["1Password", "Bitwarden", "Keychain Access", "LastPass", "Dashlane", "KeePass", "Passwords"],
+  "ignored_windows": [
+    "1Password",
+    "Bitwarden",
+    "Keychain Access",
+    "LastPass",
+    "Dashlane",
+    "KeePass",
+    "Passwords"
+  ],
   "url_block": []
 }

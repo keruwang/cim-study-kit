@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import notify, prompts, screenpipe
-from .audio_monitor import MicMonitor, find_ffmpeg
+from .audio_monitor import MicMonitor, VoiceDetector, find_ffmpeg
 from .config import sessions_root
 from .package import dir_size_mb, make_zip, open_url, reveal, sha256
 from .export import ApiError, api_stats, export_session, stats_from_export, wait_for_capture
@@ -148,9 +148,10 @@ def run_setup(cfg: dict, args) -> int:
         stop_backup_audio(mon)
     say("")
     if mon is not None:
-        say(f"  microphone monitor: heard voice during {mon.voiced_seconds} of {mon.lines} seconds (threshold {mon.voice_db} dB; last level {mon.level_db})")
+        say(f"  microphone monitor: heard voice during {mon.voiced_seconds} of {mon.lines} seconds "
+            f"(noise floor {mon.det.floor_db if mon.det.floor_db is None else round(mon.det.floor_db, 1)} dB; needs +{mon.det.margin_db} dB and zero-crossing rate >= {mon.det.min_zcr})")
         if mon.lines and mon.voiced_seconds == 0:
-            say("  WARNING: no voice detected while you talked. Lower voice_rms_db in study_config.json (e.g. -50) or check the input device.")
+            say("  WARNING: no voice detected while you talked. Speak a little louder or closer, or lower voice_min_zcr / voice_margin_db in study_config.json.")
     say(f"  frames (screenshots + text): {stats['frames']}")
     say(f"  input events: {stats['ui_events'] or 'none'}")
     say(f"  audio files: {stats['audio_files']}  (db rows: {stats['audio_chunks']})")
@@ -201,7 +202,8 @@ def start_backup_audio(session_dir: Path, cfg: dict) -> MicMonitor | None:
     ffmpeg = find_ffmpeg(cfg.get("screenpipe_port"))
     if not ffmpeg:
         return None
-    mon = MicMonitor(ffmpeg, session_dir, voice_db=float(cfg.get("voice_rms_db", -40)), backup_wav=bool(cfg.get("backup_audio", True)))
+    det = VoiceDetector(margin_db=float(cfg.get("voice_margin_db", 8)), min_zcr=float(cfg.get("voice_min_zcr", 0.10)))
+    mon = MicMonitor(ffmpeg, session_dir, detector=det, backup_wav=bool(cfg.get("backup_audio", True)))
     return mon if mon.start() else None
 
 

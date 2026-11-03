@@ -42,6 +42,9 @@ class _DemoMic:
     def heard_recently(self, within=3.0):
         return False
 
+    def bars(self):
+        return 0
+
     def seconds_since_voice(self):
         return time.time() - self.t0
 
@@ -407,7 +410,10 @@ class StudyApp:
         mon = self.backup
         try:
             heard = mon is not None and mon.heard_recently(3.0)
-            self.mic_lbl.configure(fg="#1e8e3e" if heard else "#999", text="mic" if (mon is not None and mon.alive()) else "no mic")
+            bars = mon.bars() if (mon is not None and hasattr(mon, "bars")) else 0
+            meter = "".join("▮" if i < bars else "▯" for i in range(4))
+            self.mic_lbl.configure(fg="#1e8e3e" if heard else "#999",
+                                   text=f"mic {meter}" if (mon is not None and mon.alive()) else "no mic")
         except tk.TclError:
             pass
         quiet = silence_due(self.cfg, mon, elapsed, self.last_reminder, self.minute_s)

@@ -152,8 +152,8 @@ def write_lines(path: Path, lines: list[tuple[float, str]], t0: float) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session_dir")
-    ap.add_argument("--exclude", action="append", default=["Terminal", "iTerm", "study.py", "cim-study-kit", "Windows PowerShell"],
-                    help="app or title substrings to drop (the kit's own terminal is dropped by default)")
+    ap.add_argument("--exclude", action="append", default=["Terminal", "iTerm", "study.py", "cim-study-kit", "Windows PowerShell", "Python"],
+                    help="app or title substrings to drop (the kit's own terminal and its tkinter window, app name 'Python', are dropped by default)")
     ap.add_argument("--excerpt", type=int, default=300, help="characters of screen text per view line")
     ap.add_argument("--dedup-seconds", type=float, default=60.0)
     args = ap.parse_args(argv)

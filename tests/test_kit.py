@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "researcher"))
 
 from kit import export, prompts, screenpipe  # noqa: E402
-from kit.audio_monitor import MicMonitor, find_ffmpeg  # noqa: E402
+from kit.audio_monitor import MicMonitor, VoiceDetector, find_ffmpeg  # noqa: E402
 from kit.session import silence_due  # noqa: E402
 from kit.config import DEFAULTS, load_config  # noqa: E402
 from kit.package import make_zip  # noqa: E402
@@ -250,23 +250,45 @@ class UnitTests(unittest.TestCase):
         self.assertIsNone(silence_due(cfg, None, 900, 601))
         self.assertIsNone(silence_due({"silence_reminder_minutes": 0, "silence_fallback_reminder_minutes": 0}, None, 5000, None))
 
+    def test_voice_detector_rules(self):
+        det = VoiceDetector(margin_db=8, min_zcr=0.10)
+        quiet = [-55.0] * 20
+        for _ in range(5):
+            self.assertFalse(det.push_second(quiet, [0.05] * 20))  # room noise settles the floor near -55
+        speech = [-35.0] * 20
+        self.assertTrue(det.push_second(speech, [0.15] * 20))      # loud, sustained, consonant-rich
+        self.assertFalse(det.push_second(speech, [0.04] * 20))     # loud and sustained but a low thud: keystrokes
+        self.assertFalse(det.push_second([-35.0] * 4 + [-55.0] * 16, [0.15] * 20))  # one loud click in a quiet second
+        self.assertFalse(det.push_second([-50.0] * 20, [0.2] * 20))  # too close to the floor
+        self.assertEqual(det.voiced_seconds, 1)
+        # the clock resets only on two voice seconds out of three
+        det.push_second(quiet, [0.05] * 20)
+        before = det.last_voice_second
+        det.push_second(speech, [0.15] * 20)
+        self.assertEqual(det.last_voice_second, before)
+        det.push_second(speech, [0.15] * 20)
+        self.assertEqual(det.last_voice_second, det.seconds)
+        self.assertGreaterEqual(det.bars(), 3)
+
     def test_mic_monitor_on_synthetic_audio(self):
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
             self.skipTest("ffmpeg not installed")
         with tempfile.TemporaryDirectory() as d:
-            mon = MicMonitor(ffmpeg, Path(d), voice_db=-40, backup_wav=True,
-                             input_args=["-f", "lavfi", "-i", "sine=frequency=440:duration=2"])
+            # 1200 Hz tone: zero-crossing rate 0.15 at 16 kHz, so it passes the speech rule
+            mon = MicMonitor(ffmpeg, Path(d), backup_wav=True, input_args=["-f", "lavfi", "-i", "sine=frequency=1200:duration=3"])
             self.assertTrue(mon.start())
             mon.proc.wait(timeout=20)
-            time.sleep(0.3)
-            self.assertGreaterEqual(mon.voiced_seconds, 1)
+            mon._thread.join(timeout=5)
+            # the adaptive floor catches up with a constant tone after ~3 s, so only the first seconds count
+            self.assertGreaterEqual(mon.voiced_seconds, 2)
             self.assertIsNotNone(mon.last_voice_ts)
+            self.assertGreaterEqual(mon.lines, 2)
             self.assertTrue(mon.wav_path.exists() and mon.wav_path.stat().st_size > 1000)
-            quiet = MicMonitor(ffmpeg, Path(d), voice_db=-40, backup_wav=False, input_args=["-f", "lavfi", "-i", "anullsrc=duration=2"])
+            quiet = MicMonitor(ffmpeg, Path(d), backup_wav=False, input_args=["-f", "lavfi", "-i", "anullsrc=duration=2"])
             self.assertTrue(quiet.start())
             quiet.proc.wait(timeout=20)
-            time.sleep(0.3)
+            quiet._thread.join(timeout=5)
             self.assertEqual(quiet.voiced_seconds, 0)
             self.assertGreaterEqual(quiet.lines, 1)
             self.assertIsNotNone(quiet.seconds_since_voice())

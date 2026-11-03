@@ -33,7 +33,7 @@ python3 study.py run
 
 A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, and the think-aloud instructions. When you press Start it shrinks to a small timer in the bottom-right corner of the screen and stays out of the way. Just work and keep saying what you are thinking. If you go quiet for about five minutes, a chime and a short voice line remind you to think aloud; nothing else interrupts you until "two minutes left" and "time is up". Then the window comes back, asks you for a short written summary (your goals, what you did, what you might do next), shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
 
-Press **End** on the timer to stop early. Use the **Test chime and voice** button on the first page to check that you can hear the cues. The small "mic" label on the timer turns green while the kit hears you; if it never does, tell us.
+Press **End** on the timer to stop early. Use the **Test chime and voice** button on the first page to check that you can hear the cues. The small "mic ▮▮▯▯" meter on the timer shows how loud you are relative to the room and turns green while the kit hears you talking; if it never turns green while you speak, tell us.
 
 Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` turns off the halfway side-task reminder; `--minutes 30` shortens the session; `--checkpoint-every 10` adds fixed spoken checkpoints every 10 minutes (off by default); `--demo` lets you click through the whole flow in about two minutes with nothing recorded; `--cli` uses a terminal-only flow instead of the window.
 
@@ -47,7 +47,7 @@ Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` 
 
 ## For researchers
 
-- `study_config.json`: upload link, session length, silence reminder (minutes without voice; `voice_rms_db` threshold; fixed-interval fallback without ffmpeg), optional checkpoints, deny list, pinned screenpipe version.
+- `study_config.json`: upload link, session length, silence reminder (minutes without voice; `voice_margin_db` above the room's noise floor and `voice_min_zcr` zero-crossing rate decide what counts as voice; fixed-interval fallback without ffmpeg), optional checkpoints, deny list, pinned screenpipe version.
 - `tasks/tasks.json`: the task families (A clear/routine, B choose among options, C plan something open, D explore an idea, E make something from sources) with their difficulty axes.
 - `researcher/transcribe.py <session>`: transcribe the audio locally (whisper); `researcher/export_history.py <session>`: produce the model-readable histories (events only; events + views), the think-aloud transcript kept separate, and the checkpoint times. Details in [docs/RESEARCHER.md](docs/RESEARCHER.md).
 - Tests: `python3 -m unittest discover tests`.

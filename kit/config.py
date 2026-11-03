@@ -21,8 +21,10 @@ DEFAULTS = {
     "silence_reminder_minutes": 5,
     # Without a microphone monitor, remind at this fixed interval instead; 0 = never.
     "silence_fallback_reminder_minutes": 10,
-    # RMS level (dBFS, one-second windows) above which we count the second as voice. Quiet room ~ -60, speech ~ -25..-35.
-    "voice_rms_db": -40,
+    # Voice detection: a second counts as voice when it is voice_margin_db above the room's noise floor (adaptive)
+    # and the zero-crossing rate of its loud slices is at least voice_min_zcr (speech ~0.1-0.3; keystrokes ~0.03-0.09).
+    "voice_margin_db": 8,
+    "voice_min_zcr": 0.10,
     "nudge_at_minute": 25,
     "wrap_up_minutes": 2,
     # screenpipe.
