@@ -14,7 +14,7 @@ Hi [name],
 
 Thanks for agreeing to take part. The session is one hour on your own computer, doing a real task of yours while thinking aloud, with a small program recording the screen, your clicks and typing, and your voice. You review the recording before anything leaves your machine, and you can delete parts of it. Full details are in the consent text attached; please read it first.
 
-Your participant code is **[P07]** and your task family is **[C: Plan something open]** (the program explains it). Please pick something you actually need to do.
+Your participant code is **[P07]** and your task family is **[C: Plan something open]** (the program explains it). Please pick something you actually need to do; two or three smaller items from your to-do list are fine, and you do not have to finish. If nothing comes to mind, the list in `docs/TASK_IDEAS.md` may help, or just tell me three things you need to do on your computer this week and I will suggest one.
 
 Setup, ideally a day before (10 minutes, one-time):
 
