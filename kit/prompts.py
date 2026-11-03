@@ -65,8 +65,8 @@ WHAT THE KIT DOES MEANWHILE
 
 ENDING
   At {minutes} minutes you hear "time is up". Finish your thought and
-  come back to the study window. A few typed questions follow (about
-  5 minutes), then the review and the upload.
+  come back to the study window. You then write a short summary (a
+  few sentences), review what was recorded, and upload.
 """
 
 CHECKPOINTS_OPTIONAL = """
