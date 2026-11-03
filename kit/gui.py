@@ -64,6 +64,8 @@ class StudyApp:
         self.data_dir: Path | None = None
         self.proc = None
         self.api_key = None
+        self.silence_minutes = getattr(args, 'silence_every', None) or cfg['silence_reminder_minutes']
+        self.cfg = dict(cfg, silence_reminder_minutes=self.silence_minutes)
         self.rec_start = None
         self.backup = None
         self.events: "queue.Queue[tuple]" = queue.Queue()
@@ -231,7 +233,7 @@ class StudyApp:
         self.session.update({
             "study": self.cfg["study_name"], "kit_version": "0.1.0", "ui": "gui", "demo": self.demo,
             "session_minutes": minutes, "checkpoint_every_minutes": every, "checkpoints_planned": cps,
-            "silence_reminder_minutes": self.cfg["silence_reminder_minutes"],
+            "silence_reminder_minutes": self.silence_minutes,
             "nudge_at_minute": self.cfg["nudge_at_minute"] if self.session.get("nudge_enabled") else None,
             "os": f"{SYSTEM} {platform.release()}", "machine": platform.machine(), "python": platform.python_version(),
             "screenpipe_version": self.cfg["screenpipe_version"],
@@ -411,7 +413,7 @@ class StudyApp:
             self.fired.add(("nudge",))
             self.fire("nudge", nudge)
         wrap = minutes - self.cfg["wrap_up_minutes"]
-        if self.cfg["wrap_up_minutes"] > 0 and m >= wrap and ("wrap",) not in self.fired:
+        if 0 < self.cfg["wrap_up_minutes"] < minutes and m >= wrap and ("wrap",) not in self.fired:
             self.fired.add(("wrap",))
             self.fire("wrap", wrap)
         if m >= minutes:

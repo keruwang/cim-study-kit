@@ -260,7 +260,7 @@ def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool, mo
                 fired.add(("nudge", 0))
                 append_jsonl(cp_path, {"kind": "nudge", "minute": nudge_min, "at": iso_utc(), "elapsed_s": round(elapsed)})
                 notify.cue("Side-task reminder", prompts.NUDGE_SPOKEN)
-            if m >= wrap and ("wrap", 0) not in fired and cfg["wrap_up_minutes"] > 0:
+            if m >= wrap and ("wrap", 0) not in fired and 0 < cfg["wrap_up_minutes"] < minutes:
                 fired.add(("wrap", 0))
                 notify.cue("Wrap up", prompts.WRAP_UP_SPOKEN)
             if elapsed >= minutes * 60:
@@ -355,6 +355,8 @@ def package_and_upload(cfg: dict, session_dir: Path) -> Path:
 
 
 def run_session(cfg: dict, args) -> int:
+    if getattr(args, "silence_every", None):
+        cfg = dict(cfg, silence_reminder_minutes=args.silence_every)
     tasks = prompts.load_tasks()
     say(prompts.BANNER.format(study_name=cfg["study_name"]))
     if not args.skip_checks:

@@ -28,6 +28,7 @@ def main(argv=None) -> int:
     p.add_argument("--minutes", type=int, help="override session length")
     p.add_argument("--no-nudge", action="store_true", help="no side-task reminder")
     p.add_argument("--checkpoint-every", type=int, help="minutes between checkpoints (default from study_config.json)")
+    p.add_argument("--silence-every", type=float, default=None, help="minutes without voice before a reminder (default from config, 5); e.g. 0.5 for a quick test")
     p.add_argument("--cli", action="store_true", help="terminal-only flow instead of the window")
     p.add_argument("--demo", action="store_true", help="click through the window with 5-second minutes and no recorder")
     p.add_argument("--skip-checks", action="store_true")
