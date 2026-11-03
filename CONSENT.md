@@ -6,7 +6,7 @@ _Template. Replace with the IRB-approved text before recruiting anyone outside t
 
 **What the study is about.** How people's goals take shape while they do open-ended work on a computer, and whether an AI model can follow that from a record of the work.
 
-**What you will do.** One session of about one hour on your own computer: a task of your choice within a family we assign, while thinking aloud. A chime every 10 minutes asks you to say in one sentence what you are trying to do. Afterwards you answer a few typed questions, review what was recorded, and upload the recording.
+**What you will do.** One session of about one hour on your own computer: a task of your choice within a family we assign, while thinking aloud. If you go quiet for a few minutes, a chime and a short voice line remind you to think aloud; nothing else interrupts you. Afterwards you write a short summary of what you were trying to do, review what was recorded (you can delete any app or time range), and upload the recording yourself.
 
 **What is recorded.**
 - Screenshots of all your monitors, and the text on screen, whenever something changes and at least every 15 seconds.
