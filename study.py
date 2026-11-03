@@ -27,6 +27,9 @@ def main(argv=None) -> int:
     p.add_argument("--family", help="task family letter (A-E)")
     p.add_argument("--minutes", type=int, help="override session length")
     p.add_argument("--no-nudge", action="store_true", help="no side-task reminder")
+    p.add_argument("--checkpoint-every", type=int, help="minutes between checkpoints (default from study_config.json)")
+    p.add_argument("--cli", action="store_true", help="terminal-only flow instead of the window")
+    p.add_argument("--demo", action="store_true", help="click through the window with 5-second minutes and no recorder")
     p.add_argument("--skip-checks", action="store_true")
 
     p = sub.add_parser("package", help="zip a session folder and show upload instructions")
@@ -47,7 +50,10 @@ def main(argv=None) -> int:
         if args.cmd == "setup":
             return session_mod.run_setup(cfg, args)
         if args.cmd == "run":
-            return session_mod.run_session(cfg, args)
+            if args.cli:
+                return session_mod.run_session(cfg, args)
+            from kit.gui import run_gui
+            return run_gui(cfg, args, demo=args.demo)
         if args.cmd == "package":
             return session_mod.cmd_package(cfg, args)
         if args.cmd == "status":

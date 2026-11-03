@@ -29,9 +29,11 @@ If the screenpipe desktop app is installed, quit it first.
 python3 study.py run
 ```
 
-The program walks you through: consent, your participant code, the task family you were given (or your own choice), the think-aloud instructions, then recording with a chime every 10 minutes. When the time is up, you come back to the terminal, answer a few typed questions, review what was recorded (you can delete any app or time range), and the program packs everything into one zip and opens the upload page.
+A small window opens and stays on top of your other windows. It walks you through: consent, your participant code, the task family you were given, the think-aloud instructions, then the recording with a countdown. Every 10 minutes the window flashes a banner, a chime plays, and a voice asks you to say one sentence about what you are trying to do. When the time is up, the window asks a few questions, shows what was recorded (you can delete any app or time range), packs everything into one zip, and opens the upload page.
 
-Useful flags: `--participant P07 --family C` skips two prompts; `--no-nudge` turns off the halfway side-task reminder; `--minutes 30` shortens the session.
+Keep the window visible (shrink it or move it to a corner). Use the **Test chime and voice** button on the first page to check that you can hear the cues.
+
+Useful flags: `--participant P07 --family C` pre-fills two fields; `--no-nudge` turns off the halfway side-task reminder; `--minutes 30` shortens the session; `--checkpoint-every 5` changes the chime interval; `--demo` lets you click through the whole flow in about two minutes with nothing recorded; `--cli` uses a terminal-only flow instead of the window.
 
 ## 3. If something goes wrong
 

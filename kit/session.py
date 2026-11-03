@@ -212,7 +212,8 @@ def stop_backup_audio(proc: subprocess.Popen | None) -> None:
 def timed_recording(cfg: dict, session: dict, session_dir: Path, nudge: bool) -> str:
     """Run the timer with cues. Returns 'completed' or 'stopped_early'."""
     minutes = session["session_minutes"]
-    checkpoints = checkpoint_minutes(minutes, cfg["checkpoint_every_minutes"])
+    every = getattr(session, "get", lambda k, d=None: d)("checkpoint_every_minutes") or cfg["checkpoint_every_minutes"]
+    checkpoints = checkpoint_minutes(minutes, every)
     nudge_min = cfg["nudge_at_minute"] if nudge else None
     wrap = max(0, minutes - cfg["wrap_up_minutes"])
     start = time.time()
@@ -375,7 +376,7 @@ def run_session(cfg: dict, args) -> int:
         "participant": pid, "study": cfg["study_name"], "kit_version": "0.1.0",
         "family": fam["code"], "family_name": fam["name"], "axes": fam["axes"], "task_text": task_text,
         "nudge_enabled": nudge, "side_tasks": side_tasks, "session_minutes": minutes,
-        "checkpoint_every_minutes": cfg["checkpoint_every_minutes"], "nudge_at_minute": cfg["nudge_at_minute"] if nudge else None,
+        "checkpoint_every_minutes": getattr(args, "checkpoint_every", None) or cfg["checkpoint_every_minutes"], "nudge_at_minute": cfg["nudge_at_minute"] if nudge else None,
         "os": f"{SYSTEM} {platform.release()}", "machine": platform.machine(), "python": platform.python_version(),
         "screenpipe_version": cfg["screenpipe_version"], "screenpipe_args": screenpipe.build_record_args(cfg, data_dir, cfg["screenpipe_port"]),
         "consent": {"agreed": True, "at": iso_utc()}, "created_at": iso_utc(), "local_timezone": time.strftime("%Z"),
