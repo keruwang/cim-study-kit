@@ -1,0 +1,15 @@
+{
+  "_comment": "Edit before distributing. Keys not listed here keep the defaults in kit/config.py.",
+  "study_name": "Open-ended computer work study (NYU)",
+  "contact": "Keru Wang, kw2727@nyu.edu",
+  "upload_url": "",
+  "session_minutes": 50,
+  "checkpoint_every_minutes": 10,
+  "nudge_at_minute": 25,
+  "screenpipe_version": "0.4.55",
+  "screenpipe_port": 3031,
+  "audio_transcription_engine": "disabled",
+  "idle_capture_interval_ms": 15000,
+  "ignored_windows": ["1Password", "Bitwarden", "Keychain Access", "LastPass", "Dashlane", "KeePass", "Passwords"],
+  "url_block": []
+}

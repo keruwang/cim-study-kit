@@ -1,0 +1,74 @@
+{
+  "_comment": "Task families for the preliminary study. Participants pick something REAL to them inside the assigned family. Axes: fuzziness (how settled the end state is at the start), predictability (how conventional the procedure is), expertise (everyday vs expert). Interleaving is a separate session option (the nudge).",
+  "families": [
+    {
+      "code": "A",
+      "name": "Clear and routine",
+      "axes": {"fuzziness": "low", "predictability": "high", "expertise": "everyday"},
+      "one_line": "Something you already know exactly how to do and what 'done' looks like.",
+      "guidance": "Pick a real chore with a definite end: the kind of task where you could describe the steps before starting.",
+      "examples": [
+        "Book a specific train, bus, or flight you need (you already know where and when).",
+        "Fill in a form or application you have to submit (stop before entering payment or passwords).",
+        "Convert, format, or tidy a document, spreadsheet, or slide deck you have to hand in.",
+        "Submit a reimbursement, timesheet, or reservation you have the details for."
+      ]
+    },
+    {
+      "code": "B",
+      "name": "Choose among options",
+      "axes": {"fuzziness": "medium", "predictability": "high", "expertise": "everyday"},
+      "one_line": "A choice you actually need to make, where the criteria are not fully clear yet.",
+      "guidance": "Pick a real decision you have been meaning to make. Compare, read reviews, change your mind as much as you like. You do not have to buy or commit to anything during the session.",
+      "examples": [
+        "Choose a product you need (laptop, headphones, bike, monitor, mattress, coffee gear) within a budget.",
+        "Choose a course, gym, phone plan, or apartment from listings.",
+        "Pick a restaurant or venue for a specific occasion with specific people.",
+        "Decide which of several tools or subscriptions to adopt for something you do regularly."
+      ]
+    },
+    {
+      "code": "C",
+      "name": "Plan something open",
+      "axes": {"fuzziness": "high", "predictability": "low", "expertise": "everyday"},
+      "one_line": "Planning where even the shape of the plan is up to you.",
+      "guidance": "Pick a real plan you want to make. It is fine if you end up planning something different from what you started with.",
+      "examples": [
+        "Plan a trip or a free weekend, for yourself or with others.",
+        "Plan an event: a dinner, a birthday, a small gathering, a workshop.",
+        "Figure out a gift for someone, starting from only a vague idea.",
+        "Work out how to get into a new hobby or activity: what to buy, where to start, what to skip."
+      ]
+    },
+    {
+      "code": "D",
+      "name": "Explore and shape an idea",
+      "axes": {"fuzziness": "high", "predictability": "low", "expertise": "expert"},
+      "one_line": "Reading and searching until an idea or a question takes shape.",
+      "guidance": "Pick something you are genuinely curious about in your own work or studies. The goal is allowed to move; following a tangent is part of the task.",
+      "examples": [
+        "Start from a topic and arrive at a research question or project idea by reading papers and posts.",
+        "Scope a side project: what exists already, what you would build, what tools to use.",
+        "Decide which library, framework, or method to use for a problem you have.",
+        "Prepare the outline of a talk, blog post, or lesson from sources you still have to find."
+      ]
+    },
+    {
+      "code": "E",
+      "name": "Make something from sources",
+      "axes": {"fuzziness": "medium", "predictability": "low", "expertise": "mixed"},
+      "one_line": "Producing a draft that requires looking things up along the way.",
+      "guidance": "Pick a real draft you owe someone: the writing and the looking-up should both happen during the session.",
+      "examples": [
+        "Write a draft email, proposal, report section, or application statement that needs facts you have to find.",
+        "Prepare a few slides from material you have to gather.",
+        "Write up notes or a summary for a group from several documents."
+      ]
+    }
+  ],
+  "avoid": [
+    "Anything that requires typing passwords, card numbers, or bank details (the kit records typed text).",
+    "Private conversations with other people in chat apps, unless you are fine with them being recorded.",
+    "Work under a confidentiality agreement."
+  ]
+}
